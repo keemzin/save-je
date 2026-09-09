@@ -34,7 +34,7 @@ BRAT automates downloading, installing, and updating beta plugins directly insid
 5. Search for **BRAT** (*Obsidian42 - BRAT* by TfTHacker).
 6. Click **Install**, then click **Enable**.
 
-#### Step 2: Add Quran Tajweed to BRAT
+#### Step 2: Add save-je to BRAT
 1. Open the Obsidian Command Palette (`Ctrl+P` on Windows/Linux or `Cmd+P` on macOS).
 2. Type and select: **`BRAT: Add a beta plugin for testing`**.
 3. In the repository URL prompt, enter:
