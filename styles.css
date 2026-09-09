@@ -1,0 +1,54 @@
+/* Save-Je Plugin Styles */
+
+@keyframes save-je-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.save-je-spinning svg {
+  animation: save-je-spin 1s linear infinite;
+}
+
+.save-je-status-bar {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.save-je-status-bar:hover {
+  opacity: 0.8;
+}
+
+.save-je-test-result {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.9em;
+  display: none;
+}
+
+.save-je-test-result.success {
+  display: block;
+  background-color: rgba(var(--color-green-rgb, 46, 160, 67), 0.15);
+  color: var(--text-success, #2ea043);
+  border: 1px solid rgba(var(--color-green-rgb, 46, 160, 67), 0.3);
+}
+
+.save-je-test-result.error {
+  display: block;
+  background-color: rgba(var(--color-red-rgb, 218, 54, 51), 0.15);
+  color: var(--text-error, #da3633);
+  border: 1px solid rgba(var(--color-red-rgb, 218, 54, 51), 0.3);
+}
+
+.save-je-test-result.loading {
+  display: block;
+  background-color: rgba(var(--color-blue-rgb, 56, 139, 253), 0.15);
+  color: var(--text-accent, #388bfd);
+  border: 1px solid rgba(var(--color-blue-rgb, 56, 139, 253), 0.3);
+}
