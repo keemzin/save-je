@@ -121,6 +121,7 @@ class ObsHttpHandler extends FetchHttpHandler {
       headers: transformedHeaders,
       body: transformedBody,
       contentType,
+      throw: false,
     };
 
     const rsp = await requestUrl(param);
@@ -335,6 +336,43 @@ export class IDriveS3Service {
     }
 
     throw new Error(`Unsupported body type for "${rawKey}"`);
+  }
+
+  /**
+   * Download a byte-range chunk of a file from S3.
+   * Enables streamed chunked downloads of large files without loading the whole file into RAM.
+   */
+  async downloadFileChunk(
+    relativeKey: string,
+    start: number,
+    end: number
+  ): Promise<ArrayBuffer> {
+    const rawKey = this.prefix ? `${this.prefix}${relativeKey}` : relativeKey;
+
+    const res = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.settings.bucketName.trim(),
+        Key: rawKey,
+        Range: `bytes=${start}-${end}`,
+      })
+    );
+
+    if (!res.Body) {
+      throw new Error(
+        `Empty body returned for chunk "${rawKey}" [${start}-${end}]`
+      );
+    }
+
+    if (typeof (res.Body as any).transformToByteArray === "function") {
+      const u8 = await (res.Body as any).transformToByteArray();
+      return toArrayBuffer(u8);
+    } else if (res.Body instanceof ReadableStream) {
+      return await new Response(res.Body).arrayBuffer();
+    } else if (res.Body instanceof Blob) {
+      return await res.Body.arrayBuffer();
+    }
+
+    throw new Error(`Unsupported body type for chunk "${rawKey}"`);
   }
 
   /**

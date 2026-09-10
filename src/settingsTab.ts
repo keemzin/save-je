@@ -198,12 +198,12 @@ export class SaveJeSettingTab extends PluginSettingTab {
           })
       );
 
-    // --- Large File Upload & Chunking Section ---
-    new Setting(containerEl).setName("Large File Upload & Chunking").setHeading();
+    // --- Large File & Chunking Options Section ---
+    new Setting(containerEl).setName("Large File & Chunking Options (Upload & Download)").setHeading();
 
     new Setting(containerEl)
-      .setName("Enable Multipart Chunking")
-      .setDesc("Automatically split large files into chunks for parallel upload, faster transfers, and resumable retries.")
+      .setName("Enable Chunked Transfers")
+      .setDesc("Automatically split large files into chunks for parallel upload and streamed download. Prevents mobile Out-Of-Memory crashes, reduces RAM usage, and enables live progress tracking.")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.enableMultipartUpload ?? true)

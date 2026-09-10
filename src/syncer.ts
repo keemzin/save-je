@@ -1,4 +1,4 @@
-import { App, Notice, TFile, TFolder, normalizePath } from "obsidian";
+import { App, Notice, Platform, TFile, TFolder, normalizePath } from "obsidian";
 import { IDriveS3Service } from "./s3Client";
 import type {
   LocalFileInfo,
@@ -369,17 +369,10 @@ export class VaultSyncer {
         // Read current local file content
         const localData = await this.app.vault.readBinary(localFile);
 
-        // Download remote file content
-        const remoteData = await this.s3Service.downloadFile(path);
-        const remoteInfo = remoteMap.get(path);
-
         // Create conflict copy with local data
         const conflictPath = generateConflictPath(this.app, path);
         await ensureFolderExists(this.app, conflictPath);
         await this.app.vault.createBinary(conflictPath, localData);
-
-        // Overwrite original path with remote data
-        await this.app.vault.modifyBinary(localFile, remoteData);
 
         // Upload conflict copy to S3 so other devices also have access
         const conflictFile = this.app.vault.getAbstractFileByPath(conflictPath);
@@ -391,17 +384,16 @@ export class VaultSyncer {
           conflictMtime
         );
 
-        // Update baseline sync records for both files
-        const updatedOriginal = this.app.vault.getAbstractFileByPath(path);
-        const originalMtime =
-          updatedOriginal instanceof TFile
-            ? updatedOriginal.stat.mtime
-            : Date.now();
+        // Download remote file content into original path safely (chunked if large)
+        const remoteInfo = remoteMap.get(path);
+        const { size: downloadedSize, mtimeLocal: originalMtime } =
+          await this.downloadFileToVault(path, remoteInfo);
 
+        // Update baseline sync records for both files
         prevSyncMap[path] = {
           mtimeLocal: originalMtime,
           mtimeRemote: remoteInfo?.mtime || Date.now(),
-          size: remoteData.byteLength,
+          size: downloadedSize,
           etag: remoteInfo?.etag,
         };
 
@@ -428,33 +420,41 @@ export class VaultSyncer {
       }
     }
 
-    // 7. Perform Downloads (Concurrency limit: 4)
-    await runConcurrent(toDownload, 4, async (path) => {
+    // 7. Perform Downloads (Concurrency limit: 1 on mobile to prevent memory/socket exhaustion, 2 on desktop)
+    const downloadConcurrency = Platform.isMobile ? 1 : 2;
+    await runConcurrent(toDownload, downloadConcurrency, async (path) => {
       try {
-        reportProgress("downloading", path);
-        const data = await this.s3Service.downloadFile(path);
         const remoteInfo = remoteMap.get(path);
+        const { size, mtimeLocal } = await this.downloadFileToVault(
+          path,
+          remoteInfo,
+          (loaded, total) => {
+            const filePercent =
+              total > 0 ? Math.round((loaded / total) * 100) : 100;
+            const opProgress = completedOps + (total > 0 ? loaded / total : 0);
+            const totalPercent =
+              totalOps > 0
+                ? Math.min(100, Math.round((opProgress / totalOps) * 100))
+                : 0;
+            emitProgress({
+              stage: "downloading",
+              currentFile: path,
+              completedOps,
+              totalOps,
+              fileLoadedBytes: loaded,
+              fileTotalBytes: total,
+              filePercent,
+              totalPercent,
+              message: `Downloading (${completedOps + 1}/${totalOps}): ${path}`,
+            });
+          }
+        );
 
-        await ensureFolderExists(this.app, path);
-
-        const existing = this.app.vault.getAbstractFileByPath(path);
-        if (existing instanceof TFile) {
-          await this.app.vault.modifyBinary(existing, data);
-        } else {
-          await this.app.vault.createBinary(path, data);
-        }
-
-        // Update record
-        const updatedFile = this.app.vault.getAbstractFileByPath(path);
-        const mtimeLocal =
-          updatedFile instanceof TFile
-            ? updatedFile.stat.mtime
-            : Date.now();
-
+        completedOps++;
         prevSyncMap[path] = {
           mtimeLocal,
           mtimeRemote: remoteInfo?.mtime || Date.now(),
-          size: data.byteLength,
+          size,
           etag: remoteInfo?.etag,
         };
         result.downloaded.push(path);
@@ -463,8 +463,9 @@ export class VaultSyncer {
       }
     });
 
-    // 8. Perform Uploads (Concurrency limit: 4)
-    await runConcurrent(toUpload, 4, async (path) => {
+    // 8. Perform Uploads (Concurrency limit: 1 on mobile, 2 on desktop)
+    const uploadConcurrency = Platform.isMobile ? 1 : 2;
+    await runConcurrent(toUpload, uploadConcurrency, async (path) => {
       try {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) {
@@ -518,6 +519,88 @@ export class VaultSyncer {
 
     result.durationMs = Date.now() - startTime;
     return result;
+  }
+
+  /**
+   * Downloads a file into the vault with automatic chunking for large files (>= chunkSize).
+   * Streamed chunking avoids loading giant files into RAM, preventing Out-Of-Memory crashes on mobile.
+   */
+  private async downloadFileToVault(
+    path: string,
+    remoteInfo?: RemoteFileInfo,
+    onChunkProgress?: (loaded: number, total: number) => void
+  ): Promise<{ size: number; mtimeLocal: number }> {
+    const totalSize = remoteInfo?.size ?? 0;
+    const isChunkingEnabled = this.settings.enableMultipartUpload ?? true;
+    const chunkSize =
+      Math.max(5, this.settings.multipartChunkSizeMb ?? 5) * 1024 * 1024;
+
+    await ensureFolderExists(this.app, path);
+
+    // If file is small (< chunkSize) or chunking disabled or size is unknown
+    if (!isChunkingEnabled || totalSize < chunkSize || totalSize === 0) {
+      const data = await this.s3Service.downloadFile(path);
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      if (existing instanceof TFile) {
+        await this.app.vault.modifyBinary(existing, data);
+      } else {
+        await this.app.vault.createBinary(path, data);
+      }
+
+      onChunkProgress?.(data.byteLength, data.byteLength);
+
+      const stat = await this.app.vault.adapter.stat(path);
+      return {
+        size: data.byteLength,
+        mtimeLocal: stat?.mtime || Date.now(),
+      };
+    }
+
+    // For large files (>= chunkSize): Stream in chunks to prevent mobile OOM crash
+    const totalChunks = Math.ceil(totalSize / chunkSize);
+    let loadedBytes = 0;
+
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * chunkSize;
+      const end = Math.min((i + 1) * chunkSize - 1, totalSize - 1);
+
+      let chunkData: ArrayBuffer | null = null;
+      let lastErr: any = null;
+
+      // Retry up to 3 times per chunk for mobile network resilience
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          chunkData = await this.s3Service.downloadFileChunk(path, start, end);
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+        }
+      }
+
+      if (!chunkData) {
+        throw new Error(
+          `Failed to download chunk ${i + 1}/${totalChunks} of "${path}": ${
+            lastErr?.message || String(lastErr)
+          }`
+        );
+      }
+
+      if (i === 0) {
+        await this.app.vault.adapter.writeBinary(path, chunkData);
+      } else {
+        await this.app.vault.adapter.appendBinary(path, chunkData);
+      }
+
+      loadedBytes = end + 1;
+      onChunkProgress?.(loadedBytes, totalSize);
+    }
+
+    const stat = await this.app.vault.adapter.stat(path);
+    return {
+      size: totalSize,
+      mtimeLocal: stat?.mtime || Date.now(),
+    };
   }
 }
 

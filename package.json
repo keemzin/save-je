@@ -1,6 +1,6 @@
 {
   "name": "save-je",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Minimal & fast Obsidian sync plugin tailored specifically for IDrive e2 (S3-compatible) storage.",
   "main": "main.js",
   "scripts": {
