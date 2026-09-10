@@ -15,6 +15,8 @@ Instead of massive plugins supporting dozens of unused cloud storage providers a
 - **Lightweight & Fast**: Bundled size is just ~400 KB (compared to >5 MB in bloated multi-cloud alternatives).
 - **Safe & Bidirectional**: Intelligently syncs new and updated notes between your local vault and IDrive e2, with safeguards against accidental data deletion.
 - **⚡ Visual Diff & Conflict Resolver**: Interactive side-by-side comparison modal with synchronized scrolling (and a mobile-friendly tabbed view) that lets you resolve editing conflicts in 1 click (**Smart Merge**, **Keep Local**, or **Keep Remote**) without manual copy-pasting.
+- **🚀 Smart Multipart Chunked Uploads**: Automatically splits large files (videos, audio recordings, PDFs) into chunks (configurable: 5 MB, 10 MB, 20 MB, 50 MB) with parallel streaming (2 to 6 concurrent streams) and resilient chunk retries. Files assemble seamlessly into a single file on IDrive e2.
+- **📊 Real-Time Visual Progress Bar**: Live progress card in the notification toast and status bar showing current file, animated track, percentage, and MB counter (`15.2 MB / 30.4 MB`).
 - **Interactive Status & Notifications**: Status bar conflict counter (`⚠️ 1 Conflict [Resolve]`) and sync toast buttons to review and merge conflicts on demand.
 
 ---

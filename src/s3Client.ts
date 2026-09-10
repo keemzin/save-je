@@ -7,6 +7,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import {
   FetchHttpHandler,
   type FetchHttpHandlerOptions,
@@ -338,11 +339,13 @@ export class IDriveS3Service {
 
   /**
    * Upload a file to S3 with correct content-type and mtime metadata.
+   * Automatically uses 5MB multipart chunking and parallel uploads for files >= 5MB.
    */
   async uploadFile(
     relativeKey: string,
     data: ArrayBuffer,
-    mtime?: number
+    mtime?: number,
+    onProgress?: (loaded: number, total: number) => void
   ): Promise<{ etag?: string }> {
     const rawKey = this.prefix ? `${this.prefix}${relativeKey}` : relativeKey;
     const contentType = lookupMimeType(relativeKey);
@@ -352,19 +355,58 @@ export class IDriveS3Service {
       metadata.mtime = String(mtime);
     }
 
-    const res = await this.client.send(
-      new PutObjectCommand({
+    const isMultipartEnabled = this.settings.enableMultipartUpload ?? true;
+    const chunkSizeMb = this.settings.multipartChunkSizeMb ?? 5;
+    const chunkSize = Math.max(5, chunkSizeMb) * 1024 * 1024;
+    const concurrency = this.settings.multipartConcurrency ?? 4;
+    const u8 = new Uint8Array(data);
+
+    // If multipart is disabled or file is smaller than chunk size, use single fast PUT
+    if (!isMultipartEnabled || data.byteLength < chunkSize) {
+      const res = await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.settings.bucketName.trim(),
+          Key: rawKey,
+          Body: u8,
+          ContentType: contentType,
+          ContentLength: data.byteLength,
+          Metadata: metadata,
+        })
+      );
+
+      onProgress?.(data.byteLength, data.byteLength);
+
+      return {
+        etag: res.ETag ? res.ETag.replace(/^"|"$/g, "") : undefined,
+      };
+    }
+
+    // For files >= chunkSize, use Multipart Upload with configured chunk size and concurrency
+    const parallelUpload = new Upload({
+      client: this.client,
+      queueSize: concurrency,
+      partSize: chunkSize,
+      leavePartsOnError: false,
+      params: {
         Bucket: this.settings.bucketName.trim(),
         Key: rawKey,
-        Body: new Uint8Array(data),
+        Body: u8,
         ContentType: contentType,
-        ContentLength: data.byteLength,
         Metadata: metadata,
-      })
-    );
+      },
+    });
 
+    if (onProgress) {
+      parallelUpload.on("httpUploadProgress", (progress) => {
+        if (progress.loaded !== undefined && progress.total !== undefined) {
+          onProgress(progress.loaded, progress.total);
+        }
+      });
+    }
+
+    const doneResult = (await parallelUpload.done()) as any;
     return {
-      etag: res.ETag ? res.ETag.replace(/^"|"$/g, "") : undefined,
+      etag: doneResult.ETag ? doneResult.ETag.replace(/^"|"$/g, "") : undefined,
     };
   }
 

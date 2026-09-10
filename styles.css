@@ -76,6 +76,56 @@
   cursor: pointer !important;
 }
 
+/* Real-Time Progress Notice */
+.save-je-progress-notice {
+  min-width: 280px !important;
+  max-width: 380px !important;
+  padding: 12px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25) !important;
+  border-radius: 8px !important;
+}
+
+.save-je-progress-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--text-normal);
+}
+
+.save-je-progress-file {
+  font-size: 0.8rem;
+  color: var(--text-accent, #388bfd);
+  font-family: var(--font-monospace, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-je-progress-track {
+  width: 100%;
+  height: 8px;
+  background-color: var(--background-modifier-border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 4px 0 2px 0;
+}
+
+.save-je-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--interactive-accent, #7c3aed), var(--color-blue, #388bfd));
+  border-radius: 4px;
+  transition: width 0.15s ease-out;
+}
+
+.save-je-progress-meta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  font-family: var(--font-monospace, monospace);
+  text-align: right;
+}
+
 /* =========================================
    Visual Diff & Conflict Modal Styles
    ========================================= */

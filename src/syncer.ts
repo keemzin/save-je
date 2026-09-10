@@ -4,6 +4,7 @@ import type {
   LocalFileInfo,
   RemoteFileInfo,
   SaveJeSettings,
+  SyncProgressUpdate,
   SyncResult,
   SyncStateData,
   SyncedFileRecord,
@@ -127,7 +128,9 @@ export class VaultSyncer {
   /**
    * Main sync orchestration method with 3-way baseline synchronization.
    */
-  async sync(onProgress?: (message: string) => void): Promise<SyncResult> {
+  async sync(
+    onProgress?: (update: SyncProgressUpdate | string) => void
+  ): Promise<SyncResult> {
     const startTime = Date.now();
     const result: SyncResult = {
       uploaded: [],
@@ -140,14 +143,30 @@ export class VaultSyncer {
       durationMs: 0,
     };
 
-    onProgress?.("Listing remote files on IDrive e2...");
+    const emitProgress = (update: SyncProgressUpdate | string) => {
+      onProgress?.(update);
+    };
+
+    emitProgress({
+      stage: "listing",
+      completedOps: 0,
+      totalOps: 0,
+      totalPercent: 5,
+      message: "Listing remote files on IDrive e2...",
+    });
     const remoteList = await this.s3Service.listAllObjects();
     const remoteMap = new Map<string, RemoteFileInfo>();
     for (const item of remoteList) {
       remoteMap.set(normalizePath(item.key), item);
     }
 
-    onProgress?.("Scanning local vault files...");
+    emitProgress({
+      stage: "listing",
+      completedOps: 0,
+      totalOps: 0,
+      totalPercent: 12,
+      message: "Scanning local vault files...",
+    });
     const localFiles = this.app.vault.getFiles();
     const localMap = new Map<string, LocalFileInfo>();
     for (const f of localFiles) {
@@ -295,17 +314,24 @@ export class VaultSyncer {
       toUpload.length;
 
     let completedOps = 0;
-    const reportProgress = (action: string, path: string) => {
+    const reportProgress = (stage: SyncProgressUpdate["stage"], path: string) => {
       completedOps++;
-      onProgress?.(
-        `${action} (${completedOps}/${totalOps}): ${path}`
-      );
+      const totalPercent =
+        totalOps > 0 ? Math.round((completedOps / totalOps) * 100) : 100;
+      emitProgress({
+        stage,
+        currentFile: path,
+        completedOps,
+        totalOps,
+        totalPercent,
+        message: `${stage.charAt(0).toUpperCase() + stage.slice(1)} (${completedOps}/${totalOps}): ${path}`,
+      });
     };
 
     // 4. Perform Remote Deletions
     for (const path of toDeleteRemote) {
       try {
-        reportProgress("Deleting remote", path);
+        reportProgress("deleting", path);
         await this.s3Service.deleteFile(path);
         delete prevSyncMap[path];
         result.deleted.push(path);
@@ -317,7 +343,7 @@ export class VaultSyncer {
     // 5. Perform Local Deletions
     for (const path of toDeleteLocal) {
       try {
-        reportProgress("Deleting local", path);
+        reportProgress("deleting", path);
         const f = this.app.vault.getAbstractFileByPath(path);
         if (f instanceof TFile) {
           await this.app.vault.trash(f, false);
@@ -332,7 +358,7 @@ export class VaultSyncer {
     // 6. Perform Conflict Copy Resolutions (If conflictAction === "conflict_copy")
     for (const path of toConflict) {
       try {
-        reportProgress("Resolving conflict", path);
+        reportProgress("conflict", path);
         result.conflicts.push(path);
 
         const localFile = this.app.vault.getAbstractFileByPath(path);
@@ -405,7 +431,7 @@ export class VaultSyncer {
     // 7. Perform Downloads (Concurrency limit: 4)
     await runConcurrent(toDownload, 4, async (path) => {
       try {
-        reportProgress("Downloading", path);
+        reportProgress("downloading", path);
         const data = await this.s3Service.downloadFile(path);
         const remoteInfo = remoteMap.get(path);
 
@@ -440,15 +466,39 @@ export class VaultSyncer {
     // 8. Perform Uploads (Concurrency limit: 4)
     await runConcurrent(toUpload, 4, async (path) => {
       try {
-        reportProgress("Uploading", path);
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) {
           return;
         }
 
         const data = await this.app.vault.readBinary(file);
-        const uploadRes = await this.s3Service.uploadFile(path, data, file.stat.mtime);
+        const uploadRes = await this.s3Service.uploadFile(
+          path,
+          data,
+          file.stat.mtime,
+          (loaded, total) => {
+            const filePercent =
+              total > 0 ? Math.round((loaded / total) * 100) : 100;
+            const opProgress = completedOps + (total > 0 ? loaded / total : 0);
+            const totalPercent =
+              totalOps > 0
+                ? Math.min(100, Math.round((opProgress / totalOps) * 100))
+                : 0;
+            emitProgress({
+              stage: "uploading",
+              currentFile: path,
+              completedOps,
+              totalOps,
+              fileLoadedBytes: loaded,
+              fileTotalBytes: total,
+              filePercent,
+              totalPercent,
+              message: `Uploading (${completedOps + 1}/${totalOps}): ${path}`,
+            });
+          }
+        );
 
+        completedOps++;
         prevSyncMap[path] = {
           mtimeLocal: file.stat.mtime,
           mtimeRemote: Date.now(),

@@ -197,5 +197,54 @@ export class SaveJeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    // --- Large File Upload & Chunking Section ---
+    new Setting(containerEl).setName("Large File Upload & Chunking").setHeading();
+
+    new Setting(containerEl)
+      .setName("Enable Multipart Chunking")
+      .setDesc("Automatically split large files into chunks for parallel upload, faster transfers, and resumable retries.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableMultipartUpload ?? true)
+          .onChange(async (value) => {
+            this.plugin.settings.enableMultipartUpload = value;
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+
+    if (this.plugin.settings.enableMultipartUpload ?? true) {
+      new Setting(containerEl)
+        .setName("Chunk Part Size")
+        .setDesc("Size of each chunk. S3 specification strictly requires a minimum of 5 MB per part.")
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption("5", "5 MB (Recommended - Best for mobile & WiFi)")
+            .addOption("10", "10 MB (Balanced for broadband)")
+            .addOption("20", "20 MB (High-speed fiber)")
+            .addOption("50", "50 MB (Very large files & video libraries)")
+            .setValue(String(this.plugin.settings.multipartChunkSizeMb || 5))
+            .onChange(async (value) => {
+              this.plugin.settings.multipartChunkSizeMb = Number(value);
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("Upload Concurrency")
+        .setDesc("Number of chunks uploaded simultaneously in parallel.")
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption("2", "2 Streams (Battery saver / Slower mobile)")
+            .addOption("4", "4 Streams (Recommended - Optimal balance)")
+            .addOption("6", "6 Streams (Maximum throughput on fast networks)")
+            .setValue(String(this.plugin.settings.multipartConcurrency || 4))
+            .onChange(async (value) => {
+              this.plugin.settings.multipartConcurrency = Number(value);
+              await this.plugin.saveSettings();
+            })
+        );
+    }
   }
 }

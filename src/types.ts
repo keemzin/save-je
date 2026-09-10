@@ -44,6 +44,18 @@ export interface SaveJeSettings {
    * - "keep_larger": Larger file size wins and overwrites smaller
    */
   conflictAction: ConflictActionType;
+  /**
+   * Enable S3 multipart chunked uploads for large files
+   */
+  enableMultipartUpload: boolean;
+  /**
+   * Chunk size in megabytes for multipart uploads (min 5MB per S3 specification)
+   */
+  multipartChunkSizeMb: number;
+  /**
+   * Number of parts to upload concurrently in parallel (e.g. 2, 4, 6)
+   */
+  multipartConcurrency: number;
 }
 
 export const DEFAULT_SETTINGS: SaveJeSettings = {
@@ -57,6 +69,9 @@ export const DEFAULT_SETTINGS: SaveJeSettings = {
   syncOnStartup: false,
   deleteRemoteWhenDeletedLocally: true,
   conflictAction: "keep_newer",
+  enableMultipartUpload: true,
+  multipartChunkSizeMb: 5,
+  multipartConcurrency: 4,
 };
 
 export interface RemoteFileInfo {
@@ -100,4 +115,16 @@ export interface SyncResult {
   conflictPairs: ConflictPair[];
   errors: { path: string; error: string }[];
   durationMs: number;
+}
+
+export interface SyncProgressUpdate {
+  stage: "listing" | "deleting" | "downloading" | "uploading" | "conflict" | "done";
+  currentFile?: string;
+  completedOps: number;
+  totalOps: number;
+  fileLoadedBytes?: number;
+  fileTotalBytes?: number;
+  filePercent?: number;
+  totalPercent: number;
+  message: string;
 }

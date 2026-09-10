@@ -6,6 +6,7 @@ import { VaultSyncer, findVaultConflicts } from "./syncer";
 import {
   DEFAULT_SETTINGS,
   type SaveJeSettings,
+  type SyncProgressUpdate,
   type SyncStateData,
 } from "./types";
 
@@ -229,7 +230,35 @@ export default class SaveJePlugin extends Plugin {
     }
     this.updateStatusBar("Syncing...");
 
-    const notice = new Notice("Save-Je: Starting sync...", 0);
+    const notice = new Notice("", 0);
+    const noticeEl = notice.noticeEl;
+    noticeEl.addClass("save-je-progress-notice");
+    noticeEl.empty();
+
+    const titleEl = noticeEl.createDiv({
+      cls: "save-je-progress-title",
+      text: "Save-Je: Connecting...",
+    });
+    const fileEl = noticeEl.createDiv({
+      cls: "save-je-progress-file",
+      text: "",
+    });
+    fileEl.style.display = "none";
+
+    const trackEl = noticeEl.createDiv({ cls: "save-je-progress-track" });
+    const fillEl = trackEl.createDiv({ cls: "save-je-progress-fill" });
+    fillEl.style.width = "4%";
+
+    const metaEl = noticeEl.createDiv({
+      cls: "save-je-progress-meta",
+      text: "Starting sync...",
+    });
+
+    const formatBytes = (bytes?: number) => {
+      if (!bytes || bytes <= 0) return "0 KB";
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
 
     try {
       const s3Service = new IDriveS3Service(this.settings);
@@ -243,8 +272,61 @@ export default class SaveJePlugin extends Plugin {
         }
       );
 
-      const result = await syncer.sync((progressMsg) => {
-        notice.setMessage(`Save-Je: ${progressMsg}`);
+      const result = await syncer.sync((update) => {
+        if (typeof update === "string") {
+          titleEl.setText(`Save-Je: ${update}`);
+          return;
+        }
+
+        const pct = Math.max(4, Math.min(100, update.totalPercent));
+        fillEl.style.width = `${pct}%`;
+
+        if (update.stage === "uploading" || update.stage === "downloading") {
+          const action =
+            update.stage === "uploading" ? "Uploading" : "Downloading";
+          titleEl.setText(
+            `Save-Je: ${action} (${update.completedOps + 1}/${update.totalOps})`
+          );
+        } else if (update.stage === "deleting") {
+          titleEl.setText(
+            `Save-Je: Deleting (${update.completedOps}/${update.totalOps})`
+          );
+        } else {
+          titleEl.setText(`Save-Je: ${update.message}`);
+        }
+
+        if (update.currentFile) {
+          fileEl.style.display = "block";
+          fileEl.setText(update.currentFile);
+        } else {
+          fileEl.style.display = "none";
+        }
+
+        if (
+          update.fileLoadedBytes !== undefined &&
+          update.fileTotalBytes !== undefined &&
+          update.fileTotalBytes > 0
+        ) {
+          const loadedStr = formatBytes(update.fileLoadedBytes);
+          const totalStr = formatBytes(update.fileTotalBytes);
+          metaEl.setText(
+            `${loadedStr} / ${totalStr} (${update.filePercent}%) • Total: ${update.totalPercent}%`
+          );
+        } else if (update.totalOps > 0) {
+          metaEl.setText(
+            `${update.completedOps} / ${update.totalOps} items (${update.totalPercent}%)`
+          );
+        } else {
+          metaEl.setText(update.message);
+        }
+
+        if (update.currentFile) {
+          const shortName =
+            update.currentFile.split("/").pop() || update.currentFile;
+          this.updateStatusBar(`${update.totalPercent}% (${shortName})`);
+        } else {
+          this.updateStatusBar(`${update.totalPercent}%`);
+        }
       });
 
       notice.hide();
