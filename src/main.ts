@@ -1,7 +1,8 @@
-import { Notice, Plugin, setIcon } from "obsidian";
+import { Notice, Plugin, TFile, setIcon } from "obsidian";
+import { ConflictModal } from "./conflictModal";
 import { IDriveS3Service } from "./s3Client";
 import { SaveJeSettingTab } from "./settingsTab";
-import { VaultSyncer } from "./syncer";
+import { VaultSyncer, findVaultConflicts } from "./syncer";
 import {
   DEFAULT_SETTINGS,
   type SaveJeSettings,
@@ -35,7 +36,12 @@ export default class SaveJePlugin extends Plugin {
     this.statusBarItemEl.addClass("save-je-status-bar");
     this.updateStatusBar("Idle");
     this.statusBarItemEl.onClickEvent(() => {
-      this.triggerSync();
+      const conflicts = findVaultConflicts(this.app);
+      if (conflicts.length > 0) {
+        this.openConflictResolver();
+      } else {
+        this.triggerSync();
+      }
     });
 
     // 3. Register Commands
@@ -44,6 +50,14 @@ export default class SaveJePlugin extends Plugin {
       name: "Sync now with IDrive e2",
       callback: () => {
         this.triggerSync();
+      },
+    });
+
+    this.addCommand({
+      id: "save-je-resolve-conflicts",
+      name: "Review and merge file conflicts",
+      callback: () => {
+        this.openConflictResolver();
       },
     });
 
@@ -72,15 +86,16 @@ export default class SaveJePlugin extends Plugin {
     // 5. Setup Auto-sync if configured
     this.setupAutoSync();
 
-    // 6. Sync on startup if enabled
-    if (this.settings.syncOnStartup) {
-      this.app.workspace.onLayoutReady(() => {
-        // Wait a few seconds for vault indexing to finish before initial sync
+    // 6. Layout ready checks
+    this.app.workspace.onLayoutReady(() => {
+      this.updateConflictStatus();
+
+      if (this.settings.syncOnStartup) {
         window.setTimeout(() => {
           this.triggerSync();
         }, 3000);
-      });
-    }
+      }
+    });
   }
 
   onunload() {
@@ -133,6 +148,60 @@ export default class SaveJePlugin extends Plugin {
   private updateStatusBar(status: string) {
     if (!this.statusBarItemEl) return;
     this.statusBarItemEl.setText(`Save-Je: ${status}`);
+  }
+
+  /**
+   * Scans vault and updates status bar with conflict badges if any exist.
+   */
+  updateConflictStatus() {
+    if (!this.statusBarItemEl) return;
+    const conflicts = findVaultConflicts(this.app);
+    if (conflicts.length > 0) {
+      this.statusBarItemEl.addClass("save-je-status-conflict");
+      this.statusBarItemEl.setText(
+        `Save-Je: ⚠️ ${conflicts.length} Conflict${conflicts.length > 1 ? "s" : ""} [Resolve]`
+      );
+    } else {
+      this.statusBarItemEl.removeClass("save-je-status-conflict");
+      if (this.syncState.lastSyncTime > 0) {
+        const lastDate = new Date(this.syncState.lastSyncTime);
+        const timeStr = `${String(lastDate.getHours()).padStart(2, "0")}:${String(
+          lastDate.getMinutes()
+        ).padStart(2, "0")}`;
+        this.updateStatusBar(`Synced ${timeStr}`);
+      } else {
+        this.updateStatusBar("Idle");
+      }
+    }
+  }
+
+  /**
+   * Opens the interactive Diff & Merge modal for conflicting files.
+   */
+  openConflictResolver() {
+    const conflicts = findVaultConflicts(this.app);
+    if (conflicts.length === 0) {
+      new Notice("Save-Je: No file conflicts found in your vault! 🎉", 4000);
+      this.updateConflictStatus();
+      return;
+    }
+
+    const first = conflicts[0];
+    new ConflictModal(
+      this.app,
+      first.originalFile,
+      first.conflictFile,
+      () => {
+        this.updateConflictStatus();
+        const remaining = findVaultConflicts(this.app);
+        if (remaining.length > 0) {
+          const nextNotice = new Notice(
+            `Save-Je: ${remaining.length} more conflict(s) remaining.`,
+            6000
+          );
+        }
+      }
+    ).open();
   }
 
   async triggerSync() {
@@ -188,11 +257,28 @@ export default class SaveJePlugin extends Plugin {
       const msg = `Save-Je: Synced in ${timeSec}s (↑${result.uploaded.length} uploaded, ↓${result.downloaded.length} downloaded, ✗${result.deleted.length} deleted${conflictMsg})`;
       new Notice(msg, 6000);
 
-      const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(
-        now.getMinutes()
-      ).padStart(2, "0")}`;
-      this.updateStatusBar(`Synced ${timeStr}`);
+      this.updateConflictStatus();
+
+      // If conflict copies were created, show interactive notification with a Review & Merge button
+      if (result.conflictPairs && result.conflictPairs.length > 0) {
+        const interactiveNotice = new Notice("", 12000);
+        const noticeEl = interactiveNotice.noticeEl;
+        noticeEl.empty();
+        noticeEl.addClass("save-je-interactive-notice");
+
+        const textSpan = noticeEl.createSpan({
+          text: `Save-Je: ⚠️ ${result.conflictPairs.length} conflict(s) saved. `,
+        });
+
+        const reviewBtn = noticeEl.createEl("button", {
+          text: "Review & Merge",
+          cls: "mod-cta save-je-notice-btn",
+        });
+        reviewBtn.onclick = () => {
+          interactiveNotice.hide();
+          this.openConflictResolver();
+        };
+      }
 
       if (result.errors.length > 0) {
         console.error("Save-Je sync errors:", result.errors);

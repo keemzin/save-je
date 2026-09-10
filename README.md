@@ -14,6 +14,23 @@ Instead of massive plugins supporting dozens of unused cloud storage providers a
 - **Minimal Settings**: Just 4 core fields (Endpoint, Access Key, Secret Key, Bucket Name) and a handy **"Test Connection"** button.
 - **Lightweight & Fast**: Bundled size is just ~400 KB (compared to >5 MB in bloated multi-cloud alternatives).
 - **Safe & Bidirectional**: Intelligently syncs new and updated notes between your local vault and IDrive e2, with safeguards against accidental data deletion.
+- **⚡ Visual Diff & Conflict Resolver**: Interactive side-by-side comparison modal with synchronized scrolling (and a mobile-friendly tabbed view) that lets you resolve editing conflicts in 1 click (**Smart Merge**, **Keep Local**, or **Keep Remote**) without manual copy-pasting.
+- **Interactive Status & Notifications**: Status bar conflict counter (`⚠️ 1 Conflict [Resolve]`) and sync toast buttons to review and merge conflicts on demand.
+
+---
+
+## ⚡ Visual Diff & Conflict Resolution
+
+When notes are edited concurrently on multiple devices before syncing, Save-Je prevents silent data overwrites:
+1. **Interactive Toast**: An immediate **[Review & Merge]** notification appears when conflicts occur.
+2. **Status Bar Alert**: See pending conflicts anytime in your status bar (`Save-Je: ⚠️ 1 Conflict [Resolve]`).
+3. **Side-by-Side Comparison (Desktop)**: Color-coded line diffs (green additions, red deletions) with synchronized scrolling.
+4. **Mobile Responsive Layout**: Touch-optimized tabbed view (`[Local Version]` | `[Conflict Copy]` | `[✨ Merged Preview]`).
+5. **1-Click Actions**:
+   - **🪄 Smart Merge Both**: Combines additions from both devices cleanly and deletes the conflict duplicate.
+   - **🟢 Keep Local**: Preserves this device's version and cleans up the conflict copy.
+   - **🔵 Keep Remote**: Replaces local file with the remote copy and cleans up the conflict copy.
+   - **⚪ Decide Later**: Leaves both files in your vault for manual inspection.
 
 ---
 

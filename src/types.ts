@@ -86,12 +86,18 @@ export interface SyncStateData {
   files: Record<string, SyncedFileRecord>;
 }
 
+export interface ConflictPair {
+  originalPath: string;
+  conflictPath: string;
+}
+
 export interface SyncResult {
   uploaded: string[];
   downloaded: string[];
   deleted: string[];
   skipped: string[];
   conflicts: string[];
+  conflictPairs: ConflictPair[];
   errors: { path: string; error: string }[];
   durationMs: number;
 }

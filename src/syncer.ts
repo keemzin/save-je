@@ -135,6 +135,7 @@ export class VaultSyncer {
       deleted: [],
       skipped: [],
       conflicts: [],
+      conflictPairs: [],
       errors: [],
       durationMs: 0,
     };
@@ -387,6 +388,7 @@ export class VaultSyncer {
 
         result.downloaded.push(path);
         result.uploaded.push(conflictPath);
+        result.conflictPairs.push({ originalPath: path, conflictPath });
 
         new Notice(
           `Save-Je: Conflict in "${path}". Created conflict copy "${conflictPath}".`,
@@ -467,4 +469,29 @@ export class VaultSyncer {
     result.durationMs = Date.now() - startTime;
     return result;
   }
+}
+
+/**
+ * Scans the vault for any conflict copy files (*.conflict-YYYYMMDD-HHmmss.ext)
+ * and pairs them with their original files.
+ */
+export function findVaultConflicts(app: App): {
+  originalFile: TFile;
+  conflictFile: TFile;
+}[] {
+  const files = app.vault.getFiles();
+  const results: { originalFile: TFile; conflictFile: TFile }[] = [];
+  const conflictRegex = /^(.*)\.conflict-\d{8}-\d{6}(?:-\d+)?(\.[^.]+)$/;
+
+  for (const file of files) {
+    const match = file.path.match(conflictRegex);
+    if (match) {
+      const originalPath = `${match[1]}${match[2]}`;
+      const originalFile = app.vault.getAbstractFileByPath(originalPath);
+      if (originalFile instanceof TFile) {
+        results.push({ originalFile, conflictFile: file });
+      }
+    }
+  }
+  return results;
 }
