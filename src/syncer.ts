@@ -6,6 +6,7 @@ import type {
   SaveJeSettings,
   SyncResult,
   SyncStateData,
+  SyncedFileRecord,
 } from "./types";
 
 /**
@@ -81,6 +82,27 @@ function generateConflictPath(app: App, filePath: string): string {
   return normalizePath(candidate);
 }
 
+/**
+ * Checks if a local file matches the baseline recorded at the last sync.
+ */
+function isLocalEqual(prev: SyncedFileRecord, local: LocalFileInfo): boolean {
+  if (prev.size !== local.size) return false;
+  const prevLocalTime = prev.mtimeLocal ?? prev.mtime ?? 0;
+  return Math.abs(local.mtime - prevLocalTime) <= 1000;
+}
+
+/**
+ * Checks if a remote file on S3 matches the baseline recorded at the last sync.
+ */
+function isRemoteEqual(prev: SyncedFileRecord, remote: RemoteFileInfo): boolean {
+  if (prev.size !== remote.size) return false;
+  if (prev.etag && remote.etag) {
+    return prev.etag === remote.etag;
+  }
+  const prevRemoteTime = prev.mtimeRemote ?? prev.mtime ?? 0;
+  return Math.abs(remote.mtime - prevRemoteTime) <= 2000;
+}
+
 export class VaultSyncer {
   private app: App;
   private settings: SaveJeSettings;
@@ -103,7 +125,7 @@ export class VaultSyncer {
   }
 
   /**
-   * Main sync orchestration method with 3-way conflict detection.
+   * Main sync orchestration method with 3-way baseline synchronization.
    */
   async sync(onProgress?: (message: string) => void): Promise<SyncResult> {
     const startTime = Date.now();
@@ -143,77 +165,76 @@ export class VaultSyncer {
     const toDeleteRemote: string[] = [];
     const toDeleteLocal: string[] = [];
 
-    // 1. Process all local files against remote and previous sync baseline
+    // 1. Process all local files against remote files and last-sync baseline
     for (const [path, localInfo] of localMap.entries()) {
       const remoteInfo = remoteMap.get(path);
       const prevRecord = prevSyncMap[path];
 
       if (remoteInfo) {
         if (!prevRecord) {
-          // Both exist, but we have no recorded sync baseline
-          const timeDiff = Math.abs(localInfo.mtime - remoteInfo.mtime);
+          // No baseline recorded yet
           const sizeDiff = localInfo.size !== remoteInfo.size;
-          if (timeDiff <= 1000 && !sizeDiff) {
-            // Identical
+          const timeDiff = Math.abs(localInfo.mtime - remoteInfo.mtime);
+          if (!sizeDiff && timeDiff <= 2000) {
+            // Already identical
             result.skipped.push(path);
             prevSyncMap[path] = {
-              mtime: localInfo.mtime,
+              mtimeLocal: localInfo.mtime,
+              mtimeRemote: remoteInfo.mtime,
               size: localInfo.size,
               etag: remoteInfo.etag,
             };
           } else {
-            // Both exist with differing attributes and no baseline -> Conflict!
+            // Both exist with differing attributes and no shared history -> Conflict
             toConflict.push(path);
           }
         } else {
-          // 3-way check against baseline
-          const localMtimeDiff = Math.abs(localInfo.mtime - prevRecord.mtime);
-          const localSizeDiff = localInfo.size !== prevRecord.size;
-          const localChanged = localMtimeDiff > 1000 || localSizeDiff;
+          // Backward-compatibility healing for records from older versions lacking mtimeRemote
+          if (prevRecord.mtimeRemote === undefined && prevRecord.mtimeLocal === undefined) {
+            if (localInfo.size === remoteInfo.size && localInfo.size === prevRecord.size) {
+              prevRecord.mtimeLocal = localInfo.mtime;
+              prevRecord.mtimeRemote = remoteInfo.mtime;
+              prevRecord.etag = remoteInfo.etag;
+            }
+          }
 
-          const remoteEtagChanged =
-            remoteInfo.etag && prevRecord.etag
-              ? remoteInfo.etag !== prevRecord.etag
-              : false;
-          const remoteMtimeDiff = Math.abs(remoteInfo.mtime - prevRecord.mtime);
-          const remoteSizeDiff = remoteInfo.size !== prevRecord.size;
-          const remoteChanged =
-            remoteEtagChanged || remoteMtimeDiff > 1000 || remoteSizeDiff;
+          const localEqual = isLocalEqual(prevRecord, localInfo);
+          const remoteEqual = isRemoteEqual(prevRecord, remoteInfo);
 
-          if (!localChanged && !remoteChanged) {
-            // Neither changed since last sync
+          if (localEqual && remoteEqual) {
+            // Neither changed since last sync -> Skip
             result.skipped.push(path);
-          } else if (localChanged && !remoteChanged) {
-            // Only local changed -> safe to upload
+            // Refresh baseline
+            prevRecord.mtimeLocal = localInfo.mtime;
+            prevRecord.mtimeRemote = remoteInfo.mtime;
+            prevRecord.size = localInfo.size;
+            if (remoteInfo.etag) prevRecord.etag = remoteInfo.etag;
+          } else if (!localEqual && remoteEqual) {
+            // Only local was modified -> Safe to upload
             toUpload.push(path);
-          } else if (!localChanged && remoteChanged) {
-            // Only remote changed -> safe to download
+          } else if (localEqual && !remoteEqual) {
+            // Only remote was modified -> Safe to download
             toDownload.push(path);
           } else {
-            // Both changed independently since last sync -> CONFLICT!
+            // Both changed independently -> CONFLICT!
             toConflict.push(path);
           }
         }
       } else {
         // Local exists, remote does not
-        if (
-          prevRecord &&
-          remoteMap.size > 0 &&
-          this.settings.deleteRemoteWhenDeletedLocally
-        ) {
-          const localMtimeDiff = Math.abs(localInfo.mtime - prevRecord.mtime);
-          const localSizeDiff = localInfo.size !== prevRecord.size;
-          const localChanged = localMtimeDiff > 1000 || localSizeDiff;
-
-          if (localChanged) {
-            // Conflict: Remote deleted it, but local was modified! Keep local by re-uploading
-            toUpload.push(path);
+        if (prevRecord && remoteMap.size > 0) {
+          const localEqual = isLocalEqual(prevRecord, localInfo);
+          if (localEqual) {
+            // Local was not touched -> Deleted on remote
+            if (this.settings.deleteRemoteWhenDeletedLocally) {
+              toDeleteLocal.push(path);
+            }
           } else {
-            // Deleted on remote -> delete locally
-            toDeleteLocal.push(path);
+            // Local was modified after remote deletion -> Keep local by re-uploading
+            toUpload.push(path);
           }
         } else {
-          // Newly created locally -> upload
+          // Newly created locally -> Upload
           toUpload.push(path);
         }
       }
@@ -224,33 +245,25 @@ export class VaultSyncer {
       if (!localMap.has(path)) {
         const prevRecord = prevSyncMap[path];
         if (prevRecord) {
-          const remoteEtagChanged =
-            remoteInfo.etag && prevRecord.etag
-              ? remoteInfo.etag !== prevRecord.etag
-              : false;
-          const remoteMtimeDiff = Math.abs(remoteInfo.mtime - prevRecord.mtime);
-          const remoteSizeDiff = remoteInfo.size !== prevRecord.size;
-          const remoteChanged =
-            remoteEtagChanged || remoteMtimeDiff > 1000 || remoteSizeDiff;
-
-          if (remoteChanged) {
-            // Conflict: Local deleted it, but remote was updated! Safe to re-download
-            toDownload.push(path);
-          } else if (this.settings.deleteRemoteWhenDeletedLocally) {
-            // Deleted locally -> delete remote
-            toDeleteRemote.push(path);
+          const remoteEqual = isRemoteEqual(prevRecord, remoteInfo);
+          if (remoteEqual) {
+            // Remote was not touched -> Deleted locally
+            if (this.settings.deleteRemoteWhenDeletedLocally) {
+              toDeleteRemote.push(path);
+            }
           } else {
+            // Remote was modified after local deletion -> Re-download
             toDownload.push(path);
           }
         } else {
-          // Newly created on remote -> download
+          // Newly created on remote -> Download
           toDownload.push(path);
         }
       }
     }
 
     // 3. Resolve conflicts according to user preference
-    const conflictAction = this.settings.conflictAction || "conflict_copy";
+    const conflictAction = this.settings.conflictAction || "keep_newer";
 
     if (conflictAction === "keep_newer" || conflictAction === "keep_larger") {
       for (const path of toConflict) {
@@ -270,7 +283,7 @@ export class VaultSyncer {
           toDownload.push(path);
         }
       }
-      toConflict = []; // Routed to upload/download queues
+      toConflict = []; // Routed to upload or download queues
     }
 
     const totalOps =
@@ -315,7 +328,7 @@ export class VaultSyncer {
       }
     }
 
-    // 6. Perform Conflict Copy Resolutions (Default & Safest)
+    // 6. Perform Conflict Copy Resolutions (If conflictAction === "conflict_copy")
     for (const path of toConflict) {
       try {
         reportProgress("Resolving conflict", path);
@@ -356,16 +369,18 @@ export class VaultSyncer {
         const originalMtime =
           updatedOriginal instanceof TFile
             ? updatedOriginal.stat.mtime
-            : remoteInfo?.mtime || Date.now();
+            : Date.now();
 
         prevSyncMap[path] = {
-          mtime: originalMtime,
+          mtimeLocal: originalMtime,
+          mtimeRemote: remoteInfo?.mtime || Date.now(),
           size: remoteData.byteLength,
           etag: remoteInfo?.etag,
         };
 
         prevSyncMap[conflictPath] = {
-          mtime: conflictMtime,
+          mtimeLocal: conflictMtime,
+          mtimeRemote: Date.now(),
           size: localData.byteLength,
           etag: uploadConflictRes?.etag,
         };
@@ -403,12 +418,14 @@ export class VaultSyncer {
 
         // Update record
         const updatedFile = this.app.vault.getAbstractFileByPath(path);
-        const mtime =
+        const mtimeLocal =
           updatedFile instanceof TFile
             ? updatedFile.stat.mtime
-            : remoteInfo?.mtime || Date.now();
+            : Date.now();
+
         prevSyncMap[path] = {
-          mtime,
+          mtimeLocal,
+          mtimeRemote: remoteInfo?.mtime || Date.now(),
           size: data.byteLength,
           etag: remoteInfo?.etag,
         };
@@ -431,7 +448,8 @@ export class VaultSyncer {
         const uploadRes = await this.s3Service.uploadFile(path, data, file.stat.mtime);
 
         prevSyncMap[path] = {
-          mtime: file.stat.mtime,
+          mtimeLocal: file.stat.mtime,
+          mtimeRemote: Date.now(),
           size: data.byteLength,
           etag: uploadRes?.etag,
         };

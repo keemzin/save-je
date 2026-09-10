@@ -56,7 +56,7 @@ export const DEFAULT_SETTINGS: SaveJeSettings = {
   autoSyncIntervalMinutes: 0,
   syncOnStartup: false,
   deleteRemoteWhenDeletedLocally: true,
-  conflictAction: "conflict_copy",
+  conflictAction: "keep_newer",
 };
 
 export interface RemoteFileInfo {
@@ -74,9 +74,11 @@ export interface LocalFileInfo {
 }
 
 export interface SyncedFileRecord {
-  mtime: number;
+  mtimeLocal: number;   // Local filesystem modified timestamp
+  mtimeRemote: number;  // S3 object LastModified timestamp
   size: number;
   etag?: string;
+  mtime?: number;       // Backward compatibility
 }
 
 export interface SyncStateData {
