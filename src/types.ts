@@ -1,3 +1,5 @@
+export type ConflictActionType = "conflict_copy" | "keep_newer" | "keep_larger";
+
 export interface SaveJeSettings {
   /**
    * IDrive e2 S3 endpoint, e.g. "abcd.sg01.idrivee2-8.com" or "https://abcd.sg01.idrivee2-8.com"
@@ -35,6 +37,13 @@ export interface SaveJeSettings {
    * If true, files deleted locally will be deleted on IDrive e2
    */
   deleteRemoteWhenDeletedLocally: boolean;
+  /**
+   * Strategy to resolve conflicts when both local and remote files were modified independently
+   * - "conflict_copy": Creates a dated conflict copy of the local version and downloads remote version (safest)
+   * - "keep_newer": Newer modification timestamp wins and overwrites older
+   * - "keep_larger": Larger file size wins and overwrites smaller
+   */
+  conflictAction: ConflictActionType;
 }
 
 export const DEFAULT_SETTINGS: SaveJeSettings = {
@@ -47,6 +56,7 @@ export const DEFAULT_SETTINGS: SaveJeSettings = {
   autoSyncIntervalMinutes: 0,
   syncOnStartup: false,
   deleteRemoteWhenDeletedLocally: true,
+  conflictAction: "conflict_copy",
 };
 
 export interface RemoteFileInfo {
@@ -79,6 +89,7 @@ export interface SyncResult {
   downloaded: string[];
   deleted: string[];
   skipped: string[];
+  conflicts: string[];
   errors: { path: string; error: string }[];
   durationMs: number;
 }

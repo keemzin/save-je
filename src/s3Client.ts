@@ -343,7 +343,7 @@ export class IDriveS3Service {
     relativeKey: string,
     data: ArrayBuffer,
     mtime?: number
-  ): Promise<void> {
+  ): Promise<{ etag?: string }> {
     const rawKey = this.prefix ? `${this.prefix}${relativeKey}` : relativeKey;
     const contentType = lookupMimeType(relativeKey);
 
@@ -352,7 +352,7 @@ export class IDriveS3Service {
       metadata.mtime = String(mtime);
     }
 
-    await this.client.send(
+    const res = await this.client.send(
       new PutObjectCommand({
         Bucket: this.settings.bucketName.trim(),
         Key: rawKey,
@@ -362,6 +362,10 @@ export class IDriveS3Service {
         Metadata: metadata,
       })
     );
+
+    return {
+      etag: res.ETag ? res.ETag.replace(/^"|"$/g, "") : undefined,
+    };
   }
 
   /**

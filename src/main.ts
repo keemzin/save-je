@@ -181,8 +181,12 @@ export default class SaveJePlugin extends Plugin {
       notice.hide();
 
       const timeSec = (result.durationMs / 1000).toFixed(1);
-      const msg = `Save-Je: Synced in ${timeSec}s (↑${result.uploaded.length} uploaded, ↓${result.downloaded.length} downloaded, ✗${result.deleted.length} deleted)`;
-      new Notice(msg, 5000);
+      const conflictMsg =
+        result.conflicts.length > 0
+          ? `, ⚠️${result.conflicts.length} conflict(s)`
+          : "";
+      const msg = `Save-Je: Synced in ${timeSec}s (↑${result.uploaded.length} uploaded, ↓${result.downloaded.length} downloaded, ✗${result.deleted.length} deleted${conflictMsg})`;
+      new Notice(msg, 6000);
 
       const now = new Date();
       const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(

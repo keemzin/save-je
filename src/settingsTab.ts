@@ -182,5 +182,20 @@ export class SaveJeSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("Conflict Resolution")
+      .setDesc("How to handle files that were modified independently on both this device and remote storage since last sync.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("conflict_copy", "Create conflict copy (Recommended - no data loss)")
+          .addOption("keep_newer", "Keep newer version (Overwrite older)")
+          .addOption("keep_larger", "Keep larger file (Overwrite smaller)")
+          .setValue(this.plugin.settings.conflictAction || "conflict_copy")
+          .onChange(async (value) => {
+            this.plugin.settings.conflictAction = value as any;
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }
