@@ -194,18 +194,22 @@ export default class SaveJePlugin extends Plugin {
       this.app,
       first.originalFile,
       first.conflictFile,
-      () => {
+      async () => {
         this.updateConflictStatus();
         const remaining = findVaultConflicts(this.app);
         if (remaining.length > 0) {
-          const nextNotice = new Notice(
+          new Notice(
             `Save-Je: ${remaining.length} more conflict(s) remaining.`,
             6000
           );
+        } else {
+          // All conflicts resolved! Auto-sync to upload the resolved files immediately to S3
+          await this.triggerSync();
         }
       },
       localDeviceName,
-      first.remoteDeviceName
+      first.remoteDeviceName,
+      this
     ).open();
   }
 

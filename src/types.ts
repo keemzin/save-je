@@ -98,7 +98,9 @@ export interface LocalFileInfo {
 export interface SyncedFileRecord {
   mtimeLocal: number;   // Local filesystem modified timestamp
   mtimeRemote: number;  // S3 object LastModified timestamp
-  size: number;
+  size: number;         // Backward-compatible size
+  sizeLocal?: number;   // Local filesystem size at baseline
+  sizeRemote?: number;  // S3 object size at baseline
   etag?: string;
   mtime?: number;       // Backward compatibility
   deviceName?: string;

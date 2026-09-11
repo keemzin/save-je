@@ -21,18 +21,28 @@ Instead of massive plugins supporting dozens of unused cloud storage providers a
 
 ---
 
-## ⚡ Visual Diff & Conflict Resolution
+## ⚡ Device-Aware Conflict Resolution & Visual Diff
 
-When notes are edited concurrently on multiple devices before syncing, Save-Je prevents silent data overwrites:
-1. **Interactive Toast**: An immediate **[Review & Merge]** notification appears when conflicts occur.
-2. **Status Bar Alert**: See pending conflicts anytime in your status bar (`Save-Je: ⚠️ 1 Conflict [Resolve]`).
-3. **Side-by-Side Comparison (Desktop)**: Color-coded line diffs (green additions, red deletions) with synchronized scrolling.
-4. **Mobile Responsive Layout**: Touch-optimized tabbed view (`[Local Version]` | `[Conflict Copy]` | `[✨ Merged Preview]`).
-5. **1-Click Actions**:
-   - **🪄 Smart Merge Both**: Combines additions from both devices cleanly and deletes the conflict duplicate.
-   - **🟢 Keep Local**: Preserves this device's version and cleans up the conflict copy.
-   - **🔵 Keep Remote**: Replaces local file with the remote copy and cleans up the conflict copy.
-   - **⚪ Decide Later**: Leaves both files in your vault for manual inspection.
+When notes are edited on multiple devices before syncing, Save-Je prevents silent data overwrites with an intelligent, visual merge tool:
+
+### 📱 Friendly Device Names (No "Local vs Remote" Confusion)
+Save-Je automatically detects your devices (e.g. `Windows PC`, `Android Phone`, `iPhone`, `Mac`) or lets you set a custom device name in settings:
+- Diff column headers and action buttons clearly state: **`[Keep Windows PC]`** vs **`[Keep Android Phone]`**.
+- Conflict filenames tell you exactly where the edits came from: `notes/daily.conflict-20260911-091520-from-Android_Phone.md`.
+
+### 🔍 How Conflict Detection Works (Line-by-Line)
+Just like Git, text comparison works on a **line-by-line** basis:
+- If both devices edit different sections of the same note, they merge seamlessly.
+- If both devices edit the **exact same line** (even a single word or typo fix), Save-Je flags a conflict and highlights the differences side-by-side so you can choose what to keep.
+
+### 🪄 1-Click Resolution Options
+- **🪄 Smart Merge Both**: Combines additions from both devices. If the exact same line was changed on both sides, both versions are kept stacked together so zero data is lost.
+- **💻 Keep [This Device]**: Retains your current device's version.
+- **☁️ Keep [Other Device]**: Replaces the note with the other device's version.
+- **⚪ Decide Later**: Leaves both versions in your vault so you can review later.
+
+> [!TIP]
+> Once you click to resolve, Save-Je **automatically syncs the clean note to IDrive e2** and cleans up the temporary conflict copy, so your other devices receive the update immediately with zero lingering conflicts.
 
 ---
 

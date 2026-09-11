@@ -8,6 +8,8 @@ import {
   computeLineDiff,
   smartMerge,
 } from "./diffHelper";
+import type SaveJePlugin from "./main";
+import { IDriveS3Service } from "./s3Client";
 
 const TEXT_EXTENSIONS = new Set([
   "md",
@@ -33,6 +35,7 @@ export class ConflictModal extends Modal {
   private activeTab: "split" | "local" | "remote" | "merged" = "split";
   private localDeviceName: string;
   private remoteDeviceName: string;
+  private plugin?: SaveJePlugin;
 
   constructor(
     app: App,
@@ -40,12 +43,14 @@ export class ConflictModal extends Modal {
     conflictFile: TFile,
     onResolved?: () => void,
     localDeviceName?: string,
-    remoteDeviceName?: string
+    remoteDeviceName?: string,
+    plugin?: SaveJePlugin
   ) {
     super(app);
     this.originalFile = originalFile;
     this.conflictFile = conflictFile;
     this.onResolved = onResolved;
+    this.plugin = plugin;
 
     this.localDeviceName = localDeviceName?.trim() || getDefaultDeviceName();
 
@@ -215,6 +220,17 @@ export class ConflictModal extends Modal {
     // --- Action Bar ---
     const actionsBar = contentEl.createDiv({ cls: "save-je-actions-bar" });
 
+    const cleanupConflictRecord = async () => {
+      if (this.plugin) {
+        try {
+          const s3 = new IDriveS3Service(this.plugin.settings);
+          await s3.deleteFile(this.conflictFile.path);
+        } catch {}
+        delete this.plugin.syncState.files[this.conflictFile.path];
+        await this.plugin.saveSettings();
+      }
+    };
+
     // Button 1: Smart Merge (Only for text files)
     if (isText) {
       const mergeBtn = actionsBar.createEl("button", {
@@ -228,6 +244,7 @@ export class ConflictModal extends Modal {
         try {
           await this.app.vault.modify(this.originalFile, mergedText);
           await this.app.vault.trash(this.conflictFile, false);
+          await cleanupConflictRecord();
           new Notice(
             `Save-Je: Successfully merged both versions into "${this.originalFile.name}".`,
             6000
@@ -252,6 +269,7 @@ export class ConflictModal extends Modal {
       keepLocalBtn.disabled = true;
       try {
         await this.app.vault.trash(this.conflictFile, false);
+        await cleanupConflictRecord();
         new Notice(
           `Save-Je: Kept ${this.localDeviceName} version of "${this.originalFile.name}".`,
           6000
@@ -281,6 +299,7 @@ export class ConflictModal extends Modal {
           await this.app.vault.modifyBinary(this.originalFile, remoteBytes);
         }
         await this.app.vault.trash(this.conflictFile, false);
+        await cleanupConflictRecord();
         new Notice(
           `Save-Je: Replaced "${this.originalFile.name}" with ${this.remoteDeviceName} version.`,
           6000

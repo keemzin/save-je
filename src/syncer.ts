@@ -97,22 +97,34 @@ function generateConflictPath(
 }
 
 /**
+ * Checks if a relative vault path is a conflict copy file.
+ */
+export function isConflictFilePath(path: string): boolean {
+  return /^(.*)\.conflict-\d{8}-\d{6}(?:-from-([^.]+?))?(?:-\d+)?(?:\.([^/]+))?$/.test(
+    path
+  );
+}
+
+/**
  * Checks if a local file matches the baseline recorded at the last sync.
  */
 function isLocalEqual(prev: SyncedFileRecord, local: LocalFileInfo): boolean {
-  if (prev.size !== local.size) return false;
+  const prevLocalSize = prev.sizeLocal ?? prev.size;
+  if (prevLocalSize !== local.size) return false;
   const prevLocalTime = prev.mtimeLocal ?? prev.mtime ?? 0;
   return Math.abs(local.mtime - prevLocalTime) <= 2000;
 }
 
 /**
  * Checks if a remote file on S3 matches the baseline recorded at the last sync.
+ * Prioritizes ETag comparison since ETag is the authoritative cryptographic identifier.
  */
 function isRemoteEqual(prev: SyncedFileRecord, remote: RemoteFileInfo): boolean {
-  if (prev.size !== remote.size) return false;
   if (prev.etag && remote.etag) {
     return prev.etag === remote.etag;
   }
+  const prevRemoteSize = prev.sizeRemote ?? prev.size;
+  if (prevRemoteSize !== remote.size) return false;
   const prevRemoteTime = prev.mtimeRemote ?? prev.mtime ?? 0;
   return Math.abs(remote.mtime - prevRemoteTime) <= 2000;
 }
@@ -241,6 +253,8 @@ export class VaultSyncer {
             prevRecord.mtimeLocal = localInfo.mtime;
             prevRecord.mtimeRemote = remoteInfo.mtime;
             prevRecord.size = localInfo.size;
+            prevRecord.sizeLocal = localInfo.size;
+            prevRecord.sizeRemote = remoteInfo.size;
             if (remoteInfo.etag) prevRecord.etag = remoteInfo.etag;
           } else if (!localEqual && remoteEqual) {
             // Only local was modified -> Safe to upload
@@ -276,6 +290,11 @@ export class VaultSyncer {
     // 2. Process remote files that do not exist locally
     for (const [path, remoteInfo] of remoteMap.entries()) {
       if (!localMap.has(path)) {
+        // Do not auto-download temporary conflict files from remote storage
+        if (isConflictFilePath(path)) {
+          continue;
+        }
+
         const prevRecord = prevSyncMap[path];
         if (prevRecord) {
           const remoteEqual = isRemoteEqual(prevRecord, remoteInfo);
@@ -408,40 +427,29 @@ export class VaultSyncer {
             path
           );
 
-        // Upload conflict copy to S3 so other devices also have access to the conflict file
-        const conflictFile = this.app.vault.getAbstractFileByPath(conflictPath);
-        let uploadConflictEtag: string | undefined;
-        if (conflictFile instanceof TFile) {
-          const conflictData = await this.app.vault.readBinary(conflictFile);
-          const uploadConflictRes = await this.s3Service.uploadFile(
-            conflictPath,
-            conflictData,
-            conflictMtime
-          );
-          uploadConflictEtag = uploadConflictRes?.etag;
-        }
-
         // Update baseline sync records for both files:
         // 1) Original path stays local (mtimeLocal is current localFile, mtimeRemote is remote's current)
         prevSyncMap[path] = {
           mtimeLocal: localMtime,
           mtimeRemote: remoteInfo?.mtime || Date.now(),
           size: localSize,
+          sizeLocal: localSize,
+          sizeRemote: remoteInfo?.size ?? localSize,
           etag: remoteInfo?.etag,
           deviceName: localDeviceName,
         };
 
-        // 2) Conflict copy record
+        // 2) Conflict copy record (kept purely local for diffing & resolution)
         prevSyncMap[conflictPath] = {
           mtimeLocal: conflictMtime,
-          mtimeRemote: Date.now(),
+          mtimeRemote: remoteInfo?.mtime || Date.now(),
           size: downloadedConflictSize,
-          etag: uploadConflictEtag,
+          sizeLocal: downloadedConflictSize,
+          sizeRemote: remoteInfo?.size ?? downloadedConflictSize,
           deviceName: remoteDeviceName,
         };
 
         result.downloaded.push(path);
-        result.uploaded.push(conflictPath);
         result.conflictPairs.push({
           originalPath: path,
           conflictPath,
@@ -496,6 +504,8 @@ export class VaultSyncer {
           mtimeLocal,
           mtimeRemote: remoteInfo?.mtime || Date.now(),
           size,
+          sizeLocal: size,
+          sizeRemote: size,
           etag: remoteInfo?.etag,
         };
         result.downloaded.push(path);
@@ -545,6 +555,8 @@ export class VaultSyncer {
           mtimeLocal: file.stat.mtime,
           mtimeRemote: Date.now(),
           size: data.byteLength,
+          sizeLocal: data.byteLength,
+          sizeRemote: data.byteLength,
           etag: uploadRes?.etag,
         };
         result.uploaded.push(path);
