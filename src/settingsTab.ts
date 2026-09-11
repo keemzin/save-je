@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import { getDefaultDeviceName } from "./deviceHelper";
 import type SaveJePlugin from "./main";
 import { IDriveS3Service } from "./s3Client";
 
@@ -139,6 +140,21 @@ export class SaveJeSettingTab extends PluginSettingTab {
 
     // --- Sync Preferences Section ---
     new Setting(containerEl).setName("Sync Preferences").setHeading();
+
+    new Setting(containerEl)
+      .setName("Device Name")
+      .setDesc(
+        `A friendly name for this device (e.g. "Work Laptop", "iPhone 15"). Stored with file edits to identify where changes originated during merge conflicts. Default: ${getDefaultDeviceName()}`
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder(getDefaultDeviceName())
+          .setValue(this.plugin.settings.deviceName || "")
+          .onChange(async (value) => {
+            this.plugin.settings.deviceName = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
 
     new Setting(containerEl)
       .setName("Auto-Sync Interval")

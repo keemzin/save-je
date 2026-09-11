@@ -1,5 +1,9 @@
 import { App, Modal, Notice, Platform, TFile, setIcon } from "obsidian";
 import {
+  getDefaultDeviceName,
+  humanizeSanitizedDeviceName,
+} from "./deviceHelper";
+import {
   buildSideBySideRows,
   computeLineDiff,
   smartMerge,
@@ -27,17 +31,37 @@ export class ConflictModal extends Modal {
   private conflictFile: TFile;
   private onResolved?: () => void;
   private activeTab: "split" | "local" | "remote" | "merged" = "split";
+  private localDeviceName: string;
+  private remoteDeviceName: string;
 
   constructor(
     app: App,
     originalFile: TFile,
     conflictFile: TFile,
-    onResolved?: () => void
+    onResolved?: () => void,
+    localDeviceName?: string,
+    remoteDeviceName?: string
   ) {
     super(app);
     this.originalFile = originalFile;
     this.conflictFile = conflictFile;
     this.onResolved = onResolved;
+
+    this.localDeviceName = localDeviceName?.trim() || getDefaultDeviceName();
+
+    if (remoteDeviceName && remoteDeviceName !== "Remote Device") {
+      this.remoteDeviceName = remoteDeviceName.trim();
+    } else {
+      // Auto-extract from filename if format is notes/daily.conflict-20260911-091520-from-iPhone_15.md
+      const match = conflictFile.path.match(
+        /\.conflict-\d{8}-\d{6}(?:-from-([^.]+?))?(?:-\d+)?(?:\.[^/]+)?$/
+      );
+      if (match && match[1]) {
+        this.remoteDeviceName = humanizeSanitizedDeviceName(match[1]);
+      } else {
+        this.remoteDeviceName = "Remote Device";
+      }
+    }
   }
 
   async onOpen() {
@@ -102,7 +126,7 @@ export class ConflictModal extends Modal {
     const localSizeStr = formatBytes(this.originalFile.stat.size);
     const remoteSizeStr = formatBytes(this.conflictFile.stat.size);
     metaRow.createSpan({
-      text: `💻 This Device: ${localTime} (${localSizeStr}) | 📱 Conflict Copy: ${remoteTime} (${remoteSizeStr})`,
+      text: `💻 ${this.localDeviceName} (This Device): ${localTime} (${localSizeStr}) | ☁️ ${this.remoteDeviceName}: ${remoteTime} (${remoteSizeStr})`,
     });
 
     // --- Tab Switcher (Only for text files) ---
@@ -137,8 +161,8 @@ export class ConflictModal extends Modal {
       if (!isMobile) {
         createTabBtn("split", "Side-by-Side Diff", "columns");
       }
-      createTabBtn("local", "Local Version", "file-text");
-      createTabBtn("remote", "Conflict Copy", "copy");
+      createTabBtn("local", `${this.localDeviceName} Version`, "file-text");
+      createTabBtn("remote", `${this.remoteDeviceName} Version`, "copy");
       createTabBtn("merged", "Smart Merged Preview", "sparkles");
     }
 
@@ -155,17 +179,32 @@ export class ConflictModal extends Modal {
           viewContainer,
           this.originalFile,
           this.conflictFile,
-          formatBytes
+          formatBytes,
+          this.localDeviceName,
+          this.remoteDeviceName
         );
         return;
       }
 
       if (this.activeTab === "split" && !isMobile) {
-        renderSplitDiff(viewContainer, sideBySide);
+        renderSplitDiff(
+          viewContainer,
+          sideBySide,
+          this.localDeviceName,
+          this.remoteDeviceName
+        );
       } else if (this.activeTab === "local") {
-        renderSingleView(viewContainer, originalText, "Local Version");
+        renderSingleView(
+          viewContainer,
+          originalText,
+          `${this.localDeviceName} Version`
+        );
       } else if (this.activeTab === "remote") {
-        renderSingleView(viewContainer, conflictText, "Remote Conflict Copy");
+        renderSingleView(
+          viewContainer,
+          conflictText,
+          `${this.remoteDeviceName} Version`
+        );
       } else {
         renderSingleView(viewContainer, mergedText, "Smart Merged Result", true);
       }
@@ -202,19 +241,19 @@ export class ConflictModal extends Modal {
       };
     }
 
-    // Button 2: Keep Local
+    // Button 2: Keep Local Device Version
     const keepLocalBtn = actionsBar.createEl("button", {
       cls: "save-je-action-btn save-je-local-btn",
     });
     const localIcon = keepLocalBtn.createSpan({ cls: "save-je-btn-icon" });
     setIcon(localIcon, "laptop");
-    keepLocalBtn.createSpan({ text: "Keep Local" });
+    keepLocalBtn.createSpan({ text: `Keep ${this.localDeviceName}` });
     keepLocalBtn.onclick = async () => {
       keepLocalBtn.disabled = true;
       try {
         await this.app.vault.trash(this.conflictFile, false);
         new Notice(
-          `Save-Je: Kept local version of "${this.originalFile.name}".`,
+          `Save-Je: Kept ${this.localDeviceName} version of "${this.originalFile.name}".`,
           6000
         );
         this.close();
@@ -225,13 +264,13 @@ export class ConflictModal extends Modal {
       }
     };
 
-    // Button 3: Keep Remote
+    // Button 3: Keep Remote Device Version
     const keepRemoteBtn = actionsBar.createEl("button", {
       cls: "save-je-action-btn save-je-remote-btn",
     });
     const remoteIcon = keepRemoteBtn.createSpan({ cls: "save-je-btn-icon" });
     setIcon(remoteIcon, "cloud");
-    keepRemoteBtn.createSpan({ text: "Keep Remote" });
+    keepRemoteBtn.createSpan({ text: `Keep ${this.remoteDeviceName}` });
     keepRemoteBtn.onclick = async () => {
       keepRemoteBtn.disabled = true;
       try {
@@ -243,7 +282,7 @@ export class ConflictModal extends Modal {
         }
         await this.app.vault.trash(this.conflictFile, false);
         new Notice(
-          `Save-Je: Replaced "${this.originalFile.name}" with remote version.`,
+          `Save-Je: Replaced "${this.originalFile.name}" with ${this.remoteDeviceName} version.`,
           6000
         );
         this.close();
@@ -275,7 +314,9 @@ export class ConflictModal extends Modal {
  */
 function renderSplitDiff(
   container: HTMLElement,
-  rows: ReturnType<typeof buildSideBySideRows>
+  rows: ReturnType<typeof buildSideBySideRows>,
+  localDeviceName = "This Device",
+  remoteDeviceName = "Remote Device"
 ) {
   const splitContainer = container.createDiv({
     cls: "save-je-split-diff-container",
@@ -286,7 +327,7 @@ function renderSplitDiff(
   });
   leftColumn.createDiv({
     cls: "save-je-column-header",
-    text: "💻 This Device (Local)",
+    text: `💻 ${localDeviceName} (This Device)`,
   });
   const leftScroll = leftColumn.createDiv({ cls: "save-je-scroll-pane" });
 
@@ -295,7 +336,7 @@ function renderSplitDiff(
   });
   rightColumn.createDiv({
     cls: "save-je-column-header",
-    text: "📱 Conflict Copy (Remote)",
+    text: `☁️ ${remoteDeviceName}`,
   });
   const rightScroll = rightColumn.createDiv({ cls: "save-je-scroll-pane" });
 
@@ -391,7 +432,9 @@ function renderBinaryView(
   container: HTMLElement,
   originalFile: TFile,
   conflictFile: TFile,
-  formatBytes: (bytes?: number) => string
+  formatBytes: (bytes?: number) => string,
+  localDeviceName = "This Device",
+  remoteDeviceName = "Remote Device"
 ) {
   const binaryContainer = container.createDiv({
     cls: "save-je-binary-diff-container",
@@ -407,7 +450,7 @@ function renderBinaryView(
   });
   leftCol.createDiv({
     cls: "save-je-column-header",
-    text: "💻 This Device (Local)",
+    text: `💻 ${localDeviceName} (This Device)`,
   });
   const leftBody = leftCol.createDiv({ cls: "save-je-binary-card-body" });
   leftBody.createEl("div", {
@@ -429,7 +472,7 @@ function renderBinaryView(
   });
   rightCol.createDiv({
     cls: "save-je-column-header",
-    text: "📱 Conflict Copy (Remote)",
+    text: `☁️ ${remoteDeviceName}`,
   });
   const rightBody = rightCol.createDiv({ cls: "save-je-binary-card-body" });
   rightBody.createEl("div", {
@@ -447,6 +490,6 @@ function renderBinaryView(
 
   const tip = binaryContainer.createDiv({ cls: "save-je-binary-tip" });
   tip.setText(
-    "ℹ️ Binary files (images, audio, video, PDFs) cannot be merged with line diffing. Choose 'Keep Local' to retain this device's version, or 'Keep Remote' to replace it with the conflict copy."
+    `ℹ️ Binary files (images, audio, video, PDFs) cannot be merged with line diffing. Choose 'Keep ${localDeviceName}' to retain this device's version, or 'Keep ${remoteDeviceName}' to replace it with the conflict copy.`
   );
 }

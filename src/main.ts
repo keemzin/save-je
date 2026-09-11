@@ -1,5 +1,6 @@
 import { Notice, Plugin, TFile, setIcon } from "obsidian";
 import { ConflictModal } from "./conflictModal";
+import { getEffectiveDeviceName } from "./deviceHelper";
 import { IDriveS3Service } from "./s3Client";
 import { SaveJeSettingTab } from "./settingsTab";
 import { VaultSyncer, findVaultConflicts } from "./syncer";
@@ -188,6 +189,7 @@ export default class SaveJePlugin extends Plugin {
     }
 
     const first = conflicts[0];
+    const localDeviceName = getEffectiveDeviceName(this.settings);
     new ConflictModal(
       this.app,
       first.originalFile,
@@ -201,7 +203,9 @@ export default class SaveJePlugin extends Plugin {
             6000
           );
         }
-      }
+      },
+      localDeviceName,
+      first.remoteDeviceName
     ).open();
   }
 

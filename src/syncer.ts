@@ -1,4 +1,9 @@
 import { App, Notice, Platform, TFile, TFolder, normalizePath } from "obsidian";
+import {
+  getEffectiveDeviceName,
+  humanizeSanitizedDeviceName,
+  sanitizeDeviceNameForPath,
+} from "./deviceHelper";
 import { IDriveS3Service } from "./s3Client";
 import type {
   LocalFileInfo,
@@ -60,10 +65,14 @@ async function ensureFolderExists(app: App, filePath: string): Promise<void> {
 }
 
 /**
- * Generates a non-colliding conflict copy filepath with a timestamp.
- * e.g. "notes/daily.md" -> "notes/daily.conflict-20260910-103500.md"
+ * Generates a non-colliding conflict copy filepath with a timestamp and originating device name.
+ * e.g. "notes/daily.md" -> "notes/daily.conflict-20260910-103500-from-iPhone_15.md"
  */
-function generateConflictPath(app: App, filePath: string): string {
+function generateConflictPath(
+  app: App,
+  filePath: string,
+  remoteDeviceName?: string
+): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(
@@ -74,10 +83,14 @@ function generateConflictPath(app: App, filePath: string): string {
   const ext = dotIndex !== -1 ? filePath.slice(dotIndex) : "";
   const base = dotIndex !== -1 ? filePath.slice(0, dotIndex) : filePath;
 
-  let candidate = `${base}.conflict-${timestamp}${ext}`;
+  const deviceTag = remoteDeviceName
+    ? `-from-${sanitizeDeviceNameForPath(remoteDeviceName)}`
+    : "";
+
+  let candidate = `${base}.conflict-${timestamp}${deviceTag}${ext}`;
   let counter = 1;
   while (app.vault.getAbstractFileByPath(normalizePath(candidate))) {
-    candidate = `${base}.conflict-${timestamp}-${counter}${ext}`;
+    candidate = `${base}.conflict-${timestamp}${deviceTag}-${counter}${ext}`;
     counter++;
   }
   return normalizePath(candidate);
@@ -369,12 +382,31 @@ export class VaultSyncer {
         // Local file on this device remains untouched as the local version!
         const localMtime = localFile.stat.mtime;
         const localSize = localFile.stat.size;
+        const localDeviceName = getEffectiveDeviceName(this.settings);
 
-        // Generate conflict copy path and download the REMOTE file directly into it
-        const conflictPath = generateConflictPath(this.app, path);
+        // Fetch remote device name from S3 metadata
+        let remoteDeviceName = "Remote Device";
+        try {
+          const remoteMeta = await this.s3Service.getObjectMetadata(path);
+          if (remoteMeta?.deviceName) {
+            remoteDeviceName = remoteMeta.deviceName;
+          }
+        } catch {}
+
+        // Generate conflict copy path with remote device name and download REMOTE content into it
+        const conflictPath = generateConflictPath(
+          this.app,
+          path,
+          remoteDeviceName
+        );
         const remoteInfo = remoteMap.get(path);
         const { size: downloadedConflictSize, mtimeLocal: conflictMtime } =
-          await this.downloadFileToVault(conflictPath, remoteInfo);
+          await this.downloadFileToVault(
+            conflictPath,
+            remoteInfo,
+            undefined,
+            path
+          );
 
         // Upload conflict copy to S3 so other devices also have access to the conflict file
         const conflictFile = this.app.vault.getAbstractFileByPath(conflictPath);
@@ -396,6 +428,7 @@ export class VaultSyncer {
           mtimeRemote: remoteInfo?.mtime || Date.now(),
           size: localSize,
           etag: remoteInfo?.etag,
+          deviceName: localDeviceName,
         };
 
         // 2) Conflict copy record
@@ -404,14 +437,20 @@ export class VaultSyncer {
           mtimeRemote: Date.now(),
           size: downloadedConflictSize,
           etag: uploadConflictEtag,
+          deviceName: remoteDeviceName,
         };
 
         result.downloaded.push(path);
         result.uploaded.push(conflictPath);
-        result.conflictPairs.push({ originalPath: path, conflictPath });
+        result.conflictPairs.push({
+          originalPath: path,
+          conflictPath,
+          localDeviceName,
+          remoteDeviceName,
+        });
 
         new Notice(
-          `Save-Je: Conflict in "${path}". Created conflict copy "${conflictPath}".`,
+          `Save-Je: Conflict in "${path}". Created conflict copy from ${remoteDeviceName}.`,
           8000
         );
       } catch (err: any) {
@@ -526,12 +565,15 @@ export class VaultSyncer {
   /**
    * Downloads a file into the vault with automatic chunking for large files (>= chunkSize).
    * Streamed chunking avoids loading giant files into RAM, preventing Out-Of-Memory crashes on mobile.
+   * If remoteSourceKey is provided, downloads remote content from remoteSourceKey and saves it into path.
    */
   private async downloadFileToVault(
     path: string,
     remoteInfo?: RemoteFileInfo,
-    onChunkProgress?: (loaded: number, total: number) => void
+    onChunkProgress?: (loaded: number, total: number) => void,
+    remoteSourceKey?: string
   ): Promise<{ size: number; mtimeLocal: number }> {
+    const s3Key = remoteSourceKey || path;
     const totalSize = remoteInfo?.size ?? 0;
     const isChunkingEnabled = this.settings.enableMultipartUpload ?? true;
     const chunkSize =
@@ -541,7 +583,7 @@ export class VaultSyncer {
 
     // If file is small (< chunkSize) or chunking disabled or size is unknown
     if (!isChunkingEnabled || totalSize < chunkSize || totalSize === 0) {
-      const data = await this.s3Service.downloadFile(path);
+      const data = await this.s3Service.downloadFile(s3Key);
       const existing = this.app.vault.getAbstractFileByPath(path);
       if (existing instanceof TFile) {
         await this.app.vault.modifyBinary(existing, data);
@@ -572,7 +614,7 @@ export class VaultSyncer {
       // Retry up to 3 times per chunk for mobile network resilience
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          chunkData = await this.s3Service.downloadFileChunk(path, start, end);
+          chunkData = await this.s3Service.downloadFileChunk(s3Key, start, end);
           break;
         } catch (err: any) {
           lastErr = err;
@@ -582,7 +624,7 @@ export class VaultSyncer {
 
       if (!chunkData) {
         throw new Error(
-          `Failed to download chunk ${i + 1}/${totalChunks} of "${path}": ${
+          `Failed to download chunk ${i + 1}/${totalChunks} of "${s3Key}": ${
             lastErr?.message || String(lastErr)
           }`
         );
@@ -607,25 +649,35 @@ export class VaultSyncer {
 }
 
 /**
- * Scans the vault for any conflict copy files (*.conflict-YYYYMMDD-HHmmss.ext)
- * and pairs them with their original files.
+ * Scans the vault for any conflict copy files (*.conflict-YYYYMMDD-HHmmss[-from-DeviceName].ext)
+ * and pairs them with their original files and remote device names.
  */
 export function findVaultConflicts(app: App): {
   originalFile: TFile;
   conflictFile: TFile;
+  remoteDeviceName?: string;
 }[] {
   const files = app.vault.getFiles();
-  const results: { originalFile: TFile; conflictFile: TFile }[] = [];
-  const conflictRegex = /^(.*)\.conflict-\d{8}-\d{6}(?:-\d+)?(?:\.([^/]+))?$/;
+  const results: {
+    originalFile: TFile;
+    conflictFile: TFile;
+    remoteDeviceName?: string;
+  }[] = [];
+  const conflictRegex =
+    /^(.*)\.conflict-\d{8}-\d{6}(?:-from-([^.]+?))?(?:-\d+)?(?:\.([^/]+))?$/;
 
   for (const file of files) {
     const match = file.path.match(conflictRegex);
     if (match) {
-      const ext = match[2] ? `.${match[2]}` : "";
+      const ext = match[3] ? `.${match[3]}` : "";
       const originalPath = `${match[1]}${ext}`;
       const originalFile = app.vault.getAbstractFileByPath(originalPath);
       if (originalFile instanceof TFile) {
-        results.push({ originalFile, conflictFile: file });
+        const rawDevice = match[2];
+        const remoteDeviceName = rawDevice
+          ? humanizeSanitizedDeviceName(rawDevice)
+          : undefined;
+        results.push({ originalFile, conflictFile: file, remoteDeviceName });
       }
     }
   }

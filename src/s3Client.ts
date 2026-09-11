@@ -16,6 +16,11 @@ import { type HttpRequest, HttpResponse } from "@smithy/protocol-http";
 import { buildQueryString } from "@smithy/querystring-builder";
 import type { HttpHandlerOptions } from "@smithy/types";
 import { type RequestUrlParam, requestUrl } from "obsidian";
+import {
+  encodeDeviceMetadata,
+  extractDeviceNameFromMetadata,
+  getEffectiveDeviceName,
+} from "./deviceHelper";
 import type { RemoteFileInfo, SaveJeSettings } from "./types";
 
 const MIME_MAP: Record<string, string> = {
@@ -392,6 +397,10 @@ export class IDriveS3Service {
     if (mtime) {
       metadata.mtime = String(mtime);
     }
+    const deviceName = getEffectiveDeviceName(this.settings);
+    if (deviceName) {
+      metadata.devicename = encodeDeviceMetadata(deviceName);
+    }
 
     const isMultipartEnabled = this.settings.enableMultipartUpload ?? true;
     const chunkSizeMb = this.settings.multipartChunkSizeMb ?? 5;
@@ -460,5 +469,35 @@ export class IDriveS3Service {
         Key: rawKey,
       })
     );
+  }
+
+  /**
+   * Retrieves object metadata (including device name and modification time) from S3 via HeadObject.
+   */
+  async getObjectMetadata(relativeKey: string): Promise<{
+    size?: number;
+    mtime?: number;
+    etag?: string;
+    deviceName?: string;
+  } | null> {
+    const rawKey = this.prefix ? `${this.prefix}${relativeKey}` : relativeKey;
+    try {
+      const res = await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.settings.bucketName.trim(),
+          Key: rawKey,
+        })
+      );
+      const mtime = res.LastModified ? res.LastModified.getTime() : undefined;
+      const deviceName = extractDeviceNameFromMetadata(res.Metadata);
+      return {
+        size: res.ContentLength,
+        mtime,
+        etag: res.ETag ? res.ETag.replace(/^"|"$/g, "") : undefined,
+        deviceName,
+      };
+    } catch {
+      return null;
+    }
   }
 }

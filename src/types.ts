@@ -56,6 +56,11 @@ export interface SaveJeSettings {
    * Number of parts to upload concurrently in parallel (e.g. 2, 4, 6)
    */
   multipartConcurrency: number;
+  /**
+   * Custom friendly name for this device (e.g. "Work Laptop", "iPhone 15").
+   * Stored in S3 metadata to identify which device made edits during conflicts.
+   */
+  deviceName: string;
 }
 
 export const DEFAULT_SETTINGS: SaveJeSettings = {
@@ -72,6 +77,7 @@ export const DEFAULT_SETTINGS: SaveJeSettings = {
   enableMultipartUpload: true,
   multipartChunkSizeMb: 5,
   multipartConcurrency: 4,
+  deviceName: "",
 };
 
 export interface RemoteFileInfo {
@@ -80,6 +86,7 @@ export interface RemoteFileInfo {
   size: number;
   mtime: number;      // Unix epoch milliseconds
   etag?: string;
+  deviceName?: string;
 }
 
 export interface LocalFileInfo {
@@ -94,6 +101,7 @@ export interface SyncedFileRecord {
   size: number;
   etag?: string;
   mtime?: number;       // Backward compatibility
+  deviceName?: string;
 }
 
 export interface SyncStateData {
@@ -104,6 +112,8 @@ export interface SyncStateData {
 export interface ConflictPair {
   originalPath: string;
   conflictPath: string;
+  localDeviceName?: string;
+  remoteDeviceName?: string;
 }
 
 export interface SyncResult {
