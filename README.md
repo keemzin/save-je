@@ -17,6 +17,7 @@ Instead of massive plugins supporting dozens of unused cloud storage providers a
 - **⚡ Visual Diff & Conflict Resolver**: Interactive side-by-side comparison modal with synchronized scrolling (and a mobile-friendly tabbed view) that lets you resolve editing conflicts in 1 click (**Smart Merge**, **Keep Local**, or **Keep Remote**) without manual copy-pasting.
 - **🚀 Smart Chunked Transfers (Upload & Download)**: Automatically splits large files (videos, audio recordings, PDFs) into chunks (configurable: 5 MB, 10 MB, 20 MB, 50 MB) with parallel upload and streamed disk downloads via `appendBinary`. Prevents Out-Of-Memory (OOM) crashes on mobile devices while keeping RAM usage flat at $\le 5$ MB.
 - **📊 Real-Time Visual Progress Bar**: Live progress card in the notification toast and status bar showing current file, animated track, percentage, and MB counter (`15.2 MB / 30.4 MB`).
+- **🧹 Clean Folder Pruning**: Automatically prunes empty parent directories bottom-up when files are deleted and sweeps abandoned directories, preventing empty "ghost" folders from lingering on your devices.
 - **Interactive Status & Notifications**: Status bar conflict counter (`⚠️ 1 Conflict [Resolve]`) and sync toast buttons to review and merge conflicts on demand.
 
 ---

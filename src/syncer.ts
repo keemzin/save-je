@@ -65,6 +65,84 @@ async function ensureFolderExists(app: App, filePath: string): Promise<void> {
 }
 
 /**
+ * Recursively deletes parent folders bottom-up if they are empty after file deletion.
+ */
+async function cleanEmptyParentFolders(
+  app: App,
+  folder: TFolder | null
+): Promise<void> {
+  let curr: TFolder | null = folder;
+  while (curr && !curr.isRoot()) {
+    const currentFolder = app.vault.getAbstractFileByPath(curr.path);
+    if (!(currentFolder instanceof TFolder) || currentFolder.isRoot()) {
+      break;
+    }
+    if (currentFolder.children.length === 0) {
+      const parent = currentFolder.parent;
+      try {
+        await app.vault.trash(currentFolder, false);
+      } catch {
+        break;
+      }
+      curr = parent;
+    } else {
+      break;
+    }
+  }
+}
+
+/**
+ * Sweeps all loaded folders in the vault deepest-first and prunes empty folders
+ * that have no children and no corresponding remote files.
+ */
+async function pruneEmptyFolders(
+  app: App,
+  remoteFiles: Map<string, RemoteFileInfo>
+): Promise<string[]> {
+  const pruned: string[] = [];
+  const allLoaded = app.vault.getAllLoadedFiles();
+
+  // Get all non-root folders, skipping hidden folders (e.g. starting with . or .obsidian)
+  const folders = allLoaded.filter(
+    (f): f is TFolder =>
+      f instanceof TFolder &&
+      !f.isRoot() &&
+      !f.path.startsWith(".") &&
+      !f.path.includes("/.")
+  );
+
+  // Sort deepest first (most segments in path first)
+  folders.sort((a, b) => b.path.split("/").length - a.path.split("/").length);
+
+  const remoteKeys = Array.from(remoteFiles.keys());
+
+  for (const folder of folders) {
+    const current = app.vault.getAbstractFileByPath(folder.path);
+    if (!(current instanceof TFolder) || current.isRoot()) {
+      continue;
+    }
+
+    if (current.children.length === 0) {
+      // Check if remote still has any files under this folder prefix
+      const prefix = current.path.endsWith("/") ? current.path : `${current.path}/`;
+      const hasRemoteFile = remoteKeys.some((k) => k.startsWith(prefix));
+      if (hasRemoteFile) {
+        continue;
+      }
+
+      try {
+        await app.vault.trash(current, false);
+        pruned.push(current.path);
+      } catch {
+        // Ignore deletion errors
+      }
+    }
+  }
+
+  return pruned;
+}
+
+/**
  * Generates a non-colliding conflict copy filepath with a timestamp and originating device name.
  * e.g. "notes/daily.md" -> "notes/daily.conflict-20260910-103500-from-iPhone_15.md"
  */
@@ -378,7 +456,11 @@ export class VaultSyncer {
         reportProgress("deleting", path);
         const f = this.app.vault.getAbstractFileByPath(path);
         if (f instanceof TFile) {
+          const parent = f.parent;
           await this.app.vault.trash(f, false);
+          if (this.settings.cleanEmptyFolders ?? true) {
+            await cleanEmptyParentFolders(this.app, parent);
+          }
         }
         delete prevSyncMap[path];
         result.deleted.push(path);
@@ -564,6 +646,18 @@ export class VaultSyncer {
         result.errors.push({ path, error: err.message || String(err) });
       }
     });
+
+    // 9. Prune Empty Folders (if enabled)
+    if (this.settings.cleanEmptyFolders ?? true) {
+      try {
+        const pruned = await pruneEmptyFolders(this.app, remoteMap);
+        if (pruned.length > 0) {
+          console.log(`[Save-Je] Pruned ${pruned.length} empty folders:`, pruned);
+        }
+      } catch (err) {
+        console.warn("[Save-Je] Error while pruning empty folders:", err);
+      }
+    }
 
     // Save updated state
     this.syncState.lastSyncTime = Date.now();

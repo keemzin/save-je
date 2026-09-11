@@ -200,6 +200,18 @@ export class SaveJeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Prune Empty Folders")
+      .setDesc("Automatically remove empty directories when notes inside them have been deleted.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.cleanEmptyFolders ?? true)
+          .onChange(async (value) => {
+            this.plugin.settings.cleanEmptyFolders = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Conflict Resolution")
       .setDesc("How to handle files that were modified independently on both this device and remote storage since last sync.")
       .addDropdown((dropdown) =>

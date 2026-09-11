@@ -38,6 +38,10 @@ export interface SaveJeSettings {
    */
   deleteRemoteWhenDeletedLocally: boolean;
   /**
+   * Automatically remove empty folders when all files inside them are deleted
+   */
+  cleanEmptyFolders: boolean;
+  /**
    * Strategy to resolve conflicts when both local and remote files were modified independently
    * - "conflict_copy": Creates a dated conflict copy of the local version and downloads remote version (safest)
    * - "keep_newer": Newer modification timestamp wins and overwrites older
@@ -73,6 +77,7 @@ export const DEFAULT_SETTINGS: SaveJeSettings = {
   autoSyncIntervalMinutes: 0,
   syncOnStartup: false,
   deleteRemoteWhenDeletedLocally: true,
+  cleanEmptyFolders: true,
   conflictAction: "keep_newer",
   enableMultipartUpload: true,
   multipartChunkSizeMb: 5,
