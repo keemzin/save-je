@@ -19,6 +19,7 @@ export interface SideBySideRow {
 
 /**
  * Computes Longest Common Subsequence line diff between textA and textB.
+ * Optimized with common prefix-suffix trimming to make diffing instantaneous (O(changed_hunk)).
  */
 export function computeLineDiff(textA: string, textB: string): DiffLine[] {
   const linesA = textA.split(/\r?\n/);
@@ -27,47 +28,85 @@ export function computeLineDiff(textA: string, textB: string): DiffLine[] {
   const m = linesA.length;
   const n = linesB.length;
 
-  // Boundary check for very large files to avoid memory exhaustion
-  if (m * n > 4000000) {
-    // Fallback simple line diff for extremely huge files (>2000 lines each)
-    return fallbackDiff(linesA, linesB);
+  // 1. Trim common prefix
+  let start = 0;
+  while (start < m && start < n && linesA[start] === linesB[start]) {
+    start++;
   }
 
-  // Build DP table
-  const dp: number[][] = Array.from({ length: m + 1 }, () =>
-    new Array(n + 1).fill(0)
-  );
+  // 2. Trim common suffix
+  let endA = m - 1;
+  let endB = n - 1;
+  while (endA >= start && endB >= start && linesA[endA] === linesB[endB]) {
+    endA--;
+    endB--;
+  }
 
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (linesA[i - 1] === linesB[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+  // Build prefix diff items
+  const prefixDiff: DiffLine[] = [];
+  for (let i = 0; i < start; i++) {
+    prefixDiff.push({ type: "equal", text: linesA[i] });
+  }
+
+  // Build suffix diff items
+  const suffixDiff: DiffLine[] = [];
+  for (let i = endA + 1; i < m; i++) {
+    suffixDiff.push({ type: "equal", text: linesA[i] });
+  }
+
+  // Mid section that actually differs
+  const midA = linesA.slice(start, endA + 1);
+  const midB = linesB.slice(start, endB + 1);
+
+  const midM = midA.length;
+  const midN = midB.length;
+
+  let midDiff: DiffLine[] = [];
+
+  if (midM === 0 && midN === 0) {
+    midDiff = [];
+  } else if (midM === 0) {
+    midDiff = midB.map((text) => ({ type: "added" as const, text }));
+  } else if (midN === 0) {
+    midDiff = midA.map((text) => ({ type: "deleted" as const, text }));
+  } else if (midM * midN > 4000000) {
+    midDiff = fallbackDiff(midA, midB);
+  } else {
+    // Build DP table for only the changed hunk
+    const dp: number[][] = Array.from({ length: midM + 1 }, () =>
+      new Array(midN + 1).fill(0)
+    );
+
+    for (let i = 1; i <= midM; i++) {
+      for (let j = 1; j <= midN; j++) {
+        if (midA[i - 1] === midB[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+    }
+
+    // Backtrack to build diff
+    let i = midM;
+    let j = midN;
+
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && midA[i - 1] === midB[j - 1]) {
+        midDiff.unshift({ type: "equal", text: midA[i - 1] });
+        i--;
+        j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        midDiff.unshift({ type: "added", text: midB[j - 1] });
+        j--;
+      } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+        midDiff.unshift({ type: "deleted", text: midA[i - 1] });
+        i--;
       }
     }
   }
 
-  // Backtrack to build diff
-  const diff: DiffLine[] = [];
-  let i = m;
-  let j = n;
-
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && linesA[i - 1] === linesB[j - 1]) {
-      diff.unshift({ type: "equal", text: linesA[i - 1] });
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      diff.unshift({ type: "added", text: linesB[j - 1] });
-      j--;
-    } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
-      diff.unshift({ type: "deleted", text: linesA[i - 1] });
-      i--;
-    }
-  }
-
-  return diff;
+  return [...prefixDiff, ...midDiff, ...suffixDiff];
 }
 
 function fallbackDiff(linesA: string[], linesB: string[]): DiffLine[] {

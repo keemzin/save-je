@@ -5,6 +5,23 @@ import {
   smartMerge,
 } from "./diffHelper";
 
+const TEXT_EXTENSIONS = new Set([
+  "md",
+  "txt",
+  "canvas",
+  "json",
+  "css",
+  "js",
+  "ts",
+  "html",
+  "xml",
+  "csv",
+]);
+
+function isTextFile(file: TFile): boolean {
+  return TEXT_EXTENSIONS.has((file.extension || "").toLowerCase());
+}
+
 export class ConflictModal extends Modal {
   private originalFile: TFile;
   private conflictFile: TFile;
@@ -27,37 +44,48 @@ export class ConflictModal extends Modal {
     const { contentEl, modalEl } = this;
     modalEl.addClass("save-je-conflict-modal");
 
-    // Check if on mobile phone
     const isMobile = Platform.isMobile;
+    const isText = isTextFile(this.originalFile);
+
     if (isMobile) {
       modalEl.addClass("save-je-mobile");
-      this.activeTab = "merged";
+      this.activeTab = isText ? "merged" : "local";
     }
 
     contentEl.empty();
 
-    // Loading indicator while reading contents
-    contentEl.createEl("div", {
-      cls: "save-je-diff-loading",
-      text: "Loading file differences...",
-    });
+    const formatBytes = (bytes?: number) => {
+      if (!bytes || bytes <= 0) return "0 B";
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    };
 
     let originalText = "";
     let conflictText = "";
+    let diff: any[] = [];
+    let sideBySide: any[] = [];
+    let mergedText = "";
 
-    try {
-      originalText = await this.app.vault.read(this.originalFile);
-      conflictText = await this.app.vault.read(this.conflictFile);
-    } catch (err: any) {
-      contentEl.empty();
-      contentEl.createEl("h3", { text: "Error loading conflicting files" });
-      contentEl.createEl("p", { text: err.message || String(err) });
-      return;
+    if (isText) {
+      contentEl.createEl("div", {
+        cls: "save-je-diff-loading",
+        text: "Loading file differences...",
+      });
+
+      try {
+        originalText = await this.app.vault.read(this.originalFile);
+        conflictText = await this.app.vault.read(this.conflictFile);
+        diff = computeLineDiff(originalText, conflictText);
+        sideBySide = buildSideBySideRows(diff);
+        mergedText = smartMerge(originalText, conflictText);
+      } catch (err: any) {
+        contentEl.empty();
+        contentEl.createEl("h3", { text: "Error loading conflicting files" });
+        contentEl.createEl("p", { text: err.message || String(err) });
+        return;
+      }
     }
-
-    const diff = computeLineDiff(originalText, conflictText);
-    const sideBySide = buildSideBySideRows(diff);
-    const mergedText = smartMerge(originalText, conflictText);
 
     contentEl.empty();
 
@@ -65,50 +93,54 @@ export class ConflictModal extends Modal {
     const headerEl = contentEl.createDiv({ cls: "save-je-modal-header" });
     const titleRow = headerEl.createDiv({ cls: "save-je-modal-title-row" });
     const iconEl = titleRow.createSpan({ cls: "save-je-modal-icon" });
-    setIcon(iconEl, "git-pull-request");
+    setIcon(iconEl, isText ? "git-pull-request" : "file-diff");
     titleRow.createEl("h2", { text: `Conflict: ${this.originalFile.name}` });
 
     const metaRow = headerEl.createDiv({ cls: "save-je-modal-meta" });
     const localTime = new Date(this.originalFile.stat.mtime).toLocaleTimeString();
     const remoteTime = new Date(this.conflictFile.stat.mtime).toLocaleTimeString();
+    const localSizeStr = formatBytes(this.originalFile.stat.size);
+    const remoteSizeStr = formatBytes(this.conflictFile.stat.size);
     metaRow.createSpan({
-      text: `💻 This Device: ${localTime} | 📱 Conflict Copy: ${remoteTime}`,
+      text: `💻 This Device: ${localTime} (${localSizeStr}) | 📱 Conflict Copy: ${remoteTime} (${remoteSizeStr})`,
     });
 
-    // --- Tab Switcher (Visible on mobile & desktop) ---
-    const tabsContainer = contentEl.createDiv({ cls: "save-je-tabs-bar" });
+    // --- Tab Switcher (Only for text files) ---
+    if (isText) {
+      const tabsContainer = contentEl.createDiv({ cls: "save-je-tabs-bar" });
 
-    const createTabBtn = (
-      id: "split" | "local" | "remote" | "merged",
-      label: string,
-      iconName?: string
-    ) => {
-      const btn = tabsContainer.createEl("button", {
-        cls: `save-je-tab-btn ${this.activeTab === id ? "active" : ""}`,
-      });
-      if (iconName) {
-        const iconSpan = btn.createSpan({ cls: "save-je-tab-icon" });
-        setIcon(iconSpan, iconName);
-      }
-      btn.createSpan({ text: label });
+      const createTabBtn = (
+        id: "split" | "local" | "remote" | "merged",
+        label: string,
+        iconName?: string
+      ) => {
+        const btn = tabsContainer.createEl("button", {
+          cls: `save-je-tab-btn ${this.activeTab === id ? "active" : ""}`,
+        });
+        if (iconName) {
+          const iconSpan = btn.createSpan({ cls: "save-je-tab-icon" });
+          setIcon(iconSpan, iconName);
+        }
+        btn.createSpan({ text: label });
 
-      btn.onclick = () => {
-        this.activeTab = id;
-        tabsContainer
-          .querySelectorAll(".save-je-tab-btn")
-          .forEach((el) => el.removeClass("active"));
-        btn.addClass("active");
-        renderActiveView();
+        btn.onclick = () => {
+          this.activeTab = id;
+          tabsContainer
+            .querySelectorAll(".save-je-tab-btn")
+            .forEach((el) => el.removeClass("active"));
+          btn.addClass("active");
+          renderActiveView();
+        };
+        return btn;
       };
-      return btn;
-    };
 
-    if (!isMobile) {
-      createTabBtn("split", "Side-by-Side Diff", "columns");
+      if (!isMobile) {
+        createTabBtn("split", "Side-by-Side Diff", "columns");
+      }
+      createTabBtn("local", "Local Version", "file-text");
+      createTabBtn("remote", "Conflict Copy", "copy");
+      createTabBtn("merged", "Smart Merged Preview", "sparkles");
     }
-    createTabBtn("local", "Local Version", "file-text");
-    createTabBtn("remote", "Conflict Copy", "copy");
-    createTabBtn("merged", "Smart Merged Preview", "sparkles");
 
     // --- Main View Container ---
     const viewContainer = contentEl.createDiv({
@@ -117,6 +149,16 @@ export class ConflictModal extends Modal {
 
     const renderActiveView = () => {
       viewContainer.empty();
+
+      if (!isText) {
+        renderBinaryView(
+          viewContainer,
+          this.originalFile,
+          this.conflictFile,
+          formatBytes
+        );
+        return;
+      }
 
       if (this.activeTab === "split" && !isMobile) {
         renderSplitDiff(viewContainer, sideBySide);
@@ -134,29 +176,31 @@ export class ConflictModal extends Modal {
     // --- Action Bar ---
     const actionsBar = contentEl.createDiv({ cls: "save-je-actions-bar" });
 
-    // Button 1: Smart Merge
-    const mergeBtn = actionsBar.createEl("button", {
-      cls: "mod-cta save-je-action-btn save-je-merge-btn",
-    });
-    const mergeIcon = mergeBtn.createSpan({ cls: "save-je-btn-icon" });
-    setIcon(mergeIcon, "sparkles");
-    mergeBtn.createSpan({ text: "Smart Merge Both" });
-    mergeBtn.onclick = async () => {
-      mergeBtn.disabled = true;
-      try {
-        await this.app.vault.modify(this.originalFile, mergedText);
-        await this.app.vault.trash(this.conflictFile, false);
-        new Notice(
-          `Save-Je: Successfully merged both versions into "${this.originalFile.name}".`,
-          6000
-        );
-        this.close();
-        this.onResolved?.();
-      } catch (err: any) {
-        new Notice(`Failed to merge: ${err.message || String(err)}`);
-        mergeBtn.disabled = false;
-      }
-    };
+    // Button 1: Smart Merge (Only for text files)
+    if (isText) {
+      const mergeBtn = actionsBar.createEl("button", {
+        cls: "mod-cta save-je-action-btn save-je-merge-btn",
+      });
+      const mergeIcon = mergeBtn.createSpan({ cls: "save-je-btn-icon" });
+      setIcon(mergeIcon, "sparkles");
+      mergeBtn.createSpan({ text: "Smart Merge Both" });
+      mergeBtn.onclick = async () => {
+        mergeBtn.disabled = true;
+        try {
+          await this.app.vault.modify(this.originalFile, mergedText);
+          await this.app.vault.trash(this.conflictFile, false);
+          new Notice(
+            `Save-Je: Successfully merged both versions into "${this.originalFile.name}".`,
+            6000
+          );
+          this.close();
+          this.onResolved?.();
+        } catch (err: any) {
+          new Notice(`Failed to merge: ${err.message || String(err)}`);
+          mergeBtn.disabled = false;
+        }
+      };
+    }
 
     // Button 2: Keep Local
     const keepLocalBtn = actionsBar.createEl("button", {
@@ -191,7 +235,12 @@ export class ConflictModal extends Modal {
     keepRemoteBtn.onclick = async () => {
       keepRemoteBtn.disabled = true;
       try {
-        await this.app.vault.modify(this.originalFile, conflictText);
+        if (isText) {
+          await this.app.vault.modify(this.originalFile, conflictText);
+        } else {
+          const remoteBytes = await this.app.vault.readBinary(this.conflictFile);
+          await this.app.vault.modifyBinary(this.originalFile, remoteBytes);
+        }
         await this.app.vault.trash(this.conflictFile, false);
         new Notice(
           `Save-Je: Replaced "${this.originalFile.name}" with remote version.`,
@@ -333,4 +382,71 @@ function renderSingleView(
       text: lines[idx] || " ",
     });
   }
+}
+
+/**
+ * Renders a side-by-side comparison for binary files (images, audio, video, PDFs).
+ */
+function renderBinaryView(
+  container: HTMLElement,
+  originalFile: TFile,
+  conflictFile: TFile,
+  formatBytes: (bytes?: number) => string
+) {
+  const binaryContainer = container.createDiv({
+    cls: "save-je-binary-diff-container",
+  });
+
+  const cardsWrapper = binaryContainer.createDiv({
+    cls: "save-je-split-diff-container",
+  });
+
+  // Left card: Local
+  const leftCol = cardsWrapper.createDiv({
+    cls: "save-je-diff-column left",
+  });
+  leftCol.createDiv({
+    cls: "save-je-column-header",
+    text: "💻 This Device (Local)",
+  });
+  const leftBody = leftCol.createDiv({ cls: "save-je-binary-card-body" });
+  leftBody.createEl("div", {
+    cls: "save-je-binary-filename",
+    text: originalFile.name,
+  });
+  leftBody.createEl("div", {
+    cls: "save-je-binary-meta",
+    text: `Size: ${formatBytes(originalFile.stat.size)}`,
+  });
+  leftBody.createEl("div", {
+    cls: "save-je-binary-meta",
+    text: `Modified: ${new Date(originalFile.stat.mtime).toLocaleString()}`,
+  });
+
+  // Right card: Remote
+  const rightCol = cardsWrapper.createDiv({
+    cls: "save-je-diff-column right",
+  });
+  rightCol.createDiv({
+    cls: "save-je-column-header",
+    text: "📱 Conflict Copy (Remote)",
+  });
+  const rightBody = rightCol.createDiv({ cls: "save-je-binary-card-body" });
+  rightBody.createEl("div", {
+    cls: "save-je-binary-filename",
+    text: conflictFile.name,
+  });
+  rightBody.createEl("div", {
+    cls: "save-je-binary-meta",
+    text: `Size: ${formatBytes(conflictFile.stat.size)}`,
+  });
+  rightBody.createEl("div", {
+    cls: "save-je-binary-meta",
+    text: `Modified: ${new Date(conflictFile.stat.mtime).toLocaleString()}`,
+  });
+
+  const tip = binaryContainer.createDiv({ cls: "save-je-binary-tip" });
+  tip.setText(
+    "ℹ️ Binary files (images, audio, video, PDFs) cannot be merged with line diffing. Choose 'Keep Local' to retain this device's version, or 'Keep Remote' to replace it with the conflict copy."
+  );
 }

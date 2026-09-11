@@ -1,7 +1,8 @@
-# Reference directory containing original remotely-save codebase
+# Reference directory
 /REF/
 REF/
 REF
+future.md
 
 # Node / NPM
 node_modules/

@@ -425,3 +425,44 @@
     font-size: 12px;
   }
 }
+
+/* Binary Conflict View */
+.save-je-binary-diff-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  height: 100%;
+}
+
+.save-je-binary-card-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--background-primary);
+  flex: 1;
+}
+
+.save-je-binary-filename {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text-normal);
+  word-break: break-all;
+}
+
+.save-je-binary-meta {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.save-je-binary-tip {
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+

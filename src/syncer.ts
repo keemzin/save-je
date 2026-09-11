@@ -89,7 +89,7 @@ function generateConflictPath(app: App, filePath: string): string {
 function isLocalEqual(prev: SyncedFileRecord, local: LocalFileInfo): boolean {
   if (prev.size !== local.size) return false;
   const prevLocalTime = prev.mtimeLocal ?? prev.mtime ?? 0;
-  return Math.abs(local.mtime - prevLocalTime) <= 1000;
+  return Math.abs(local.mtime - prevLocalTime) <= 2000;
 }
 
 /**
@@ -366,42 +366,44 @@ export class VaultSyncer {
           continue;
         }
 
-        // Read current local file content
-        const localData = await this.app.vault.readBinary(localFile);
+        // Local file on this device remains untouched as the local version!
+        const localMtime = localFile.stat.mtime;
+        const localSize = localFile.stat.size;
 
-        // Create conflict copy with local data
+        // Generate conflict copy path and download the REMOTE file directly into it
         const conflictPath = generateConflictPath(this.app, path);
-        await ensureFolderExists(this.app, conflictPath);
-        await this.app.vault.createBinary(conflictPath, localData);
-
-        // Upload conflict copy to S3 so other devices also have access
-        const conflictFile = this.app.vault.getAbstractFileByPath(conflictPath);
-        const conflictMtime =
-          conflictFile instanceof TFile ? conflictFile.stat.mtime : Date.now();
-        const uploadConflictRes = await this.s3Service.uploadFile(
-          conflictPath,
-          localData,
-          conflictMtime
-        );
-
-        // Download remote file content into original path safely (chunked if large)
         const remoteInfo = remoteMap.get(path);
-        const { size: downloadedSize, mtimeLocal: originalMtime } =
-          await this.downloadFileToVault(path, remoteInfo);
+        const { size: downloadedConflictSize, mtimeLocal: conflictMtime } =
+          await this.downloadFileToVault(conflictPath, remoteInfo);
 
-        // Update baseline sync records for both files
+        // Upload conflict copy to S3 so other devices also have access to the conflict file
+        const conflictFile = this.app.vault.getAbstractFileByPath(conflictPath);
+        let uploadConflictEtag: string | undefined;
+        if (conflictFile instanceof TFile) {
+          const conflictData = await this.app.vault.readBinary(conflictFile);
+          const uploadConflictRes = await this.s3Service.uploadFile(
+            conflictPath,
+            conflictData,
+            conflictMtime
+          );
+          uploadConflictEtag = uploadConflictRes?.etag;
+        }
+
+        // Update baseline sync records for both files:
+        // 1) Original path stays local (mtimeLocal is current localFile, mtimeRemote is remote's current)
         prevSyncMap[path] = {
-          mtimeLocal: originalMtime,
+          mtimeLocal: localMtime,
           mtimeRemote: remoteInfo?.mtime || Date.now(),
-          size: downloadedSize,
+          size: localSize,
           etag: remoteInfo?.etag,
         };
 
+        // 2) Conflict copy record
         prevSyncMap[conflictPath] = {
           mtimeLocal: conflictMtime,
           mtimeRemote: Date.now(),
-          size: localData.byteLength,
-          etag: uploadConflictRes?.etag,
+          size: downloadedConflictSize,
+          etag: uploadConflictEtag,
         };
 
         result.downloaded.push(path);
@@ -614,12 +616,13 @@ export function findVaultConflicts(app: App): {
 }[] {
   const files = app.vault.getFiles();
   const results: { originalFile: TFile; conflictFile: TFile }[] = [];
-  const conflictRegex = /^(.*)\.conflict-\d{8}-\d{6}(?:-\d+)?(\.[^.]+)$/;
+  const conflictRegex = /^(.*)\.conflict-\d{8}-\d{6}(?:-\d+)?(?:\.([^/]+))?$/;
 
   for (const file of files) {
     const match = file.path.match(conflictRegex);
     if (match) {
-      const originalPath = `${match[1]}${match[2]}`;
+      const ext = match[2] ? `.${match[2]}` : "";
+      const originalPath = `${match[1]}${ext}`;
       const originalFile = app.vault.getAbstractFileByPath(originalPath);
       if (originalFile instanceof TFile) {
         results.push({ originalFile, conflictFile: file });
